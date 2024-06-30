@@ -1,6 +1,6 @@
-CFLAGS += -std=c11 -Wall -O2
+CFLAGS += -std=c11 -Wall -O0 -g3
 TBCFLAGS = -c -Wall -O2
-LIBS +=
+LIBS += -lSDL2 -lSDL2_image -lfftw3 -lm -lmpdclient
 
 OBJS =
 
@@ -8,10 +8,10 @@ OBJS =
 all: mpdvz
 
 mpdvz: mpdvz.c ${OBJS}
-	$(CC) -o $@ $< $(CFLAGS) $(OBJS) $(LIBS)
+	$(CXX) -o $@ $< $(CFLAGS) $(OBJS) $(LIBS)
 
 mpdvz_debug: mpdvz.c ${OBJS}
-	$(CC) -o $@ mpdvz.c $(CFLAGS) $(OBJS) $(LIBS) -DDEBUG
+	$(CXX) -o $@ mpdvz.c $(CFLAGS) $(OBJS) $(LIBS) -DDEBUG
 
 clean:
 	rm -rf mpdvz mpdvz_debug *.o
