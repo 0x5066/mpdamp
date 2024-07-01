@@ -21,6 +21,7 @@
 #define BSZ 768
 
 int VisMode = 0;
+int res = 0;
 
 const int mult = 2;
 
@@ -318,26 +319,28 @@ void draw_numtext(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
     SDL_RenderClear(renderer);
 
-    for (const char *c = text; *c != '\0'; ++c) {
-        int char_index = -1;
-        if (*c >= '0' && *c <= '9') {
-            char_index = *c - '0';
-        } else if (*c == '-') {
-            char_index = 10;
-        } else if (*c == ':') {
-            char_index = 11;
-        } else if (*c == ' ') {
-            char_index = 11;
-        }
-
-        if (char_index != -1) {
-            SDL_Rect src_rect = { char_index * CHAR_WIDTH, 0, CHAR_WIDTH, CHAR_HEIGHT };
-            SDL_Rect dst_rect = { x, y, CHAR_WIDTH, CHAR_HEIGHT };
-            SDL_RenderCopy(renderer, font_texture, &src_rect, &dst_rect);
-            if (*c == ':'){
-                x -= 6;  // Increment x position for next character
+    if (res == 1 || res == 3){
+        for (const char *c = text; *c != '\0'; ++c) {
+            int char_index = -1;
+            if (*c >= '0' && *c <= '9') {
+                char_index = *c - '0';
+            } else if (*c == '-') {
+                char_index = 10;
+            } else if (*c == ':') {
+                char_index = 11;
+            } else if (*c == ' ') {
+                char_index = 11;
             }
-            x += CHAR_WIDTH + 3;  // Increment x position for next character
+
+            if (char_index != -1) {
+                SDL_Rect src_rect = { char_index * CHAR_WIDTH, 0, CHAR_WIDTH, CHAR_HEIGHT };
+                SDL_Rect dst_rect = { x, y, CHAR_WIDTH, CHAR_HEIGHT };
+                SDL_RenderCopy(renderer, font_texture, &src_rect, &dst_rect);
+                if (*c == ':'){
+                    x -= 6;  // Increment x position for next character
+                }
+                x += CHAR_WIDTH + 3;  // Increment x position for next character
+            }
         }
     }
     
@@ -493,15 +496,17 @@ void draw_progress_bar(SDL_Renderer *renderer, SDL_Texture *progress_texture, SD
     SDL_Rect dst_bg = { 0, 0, 248, 10 };
     SDL_RenderCopy(renderer, posbar_texture, &src_bg, &dst_bg);
 
-    // Draw the seek button
-    SDL_Rect seek_src_rect;
-    if (isDragging){
-        seek_src_rect = { 278, 0, 29, 10 };
-    } else {
-        seek_src_rect = { 248, 0, 29, 10 };        
+    if (res == 1 || res == 3){
+        // Draw the seek button
+        SDL_Rect seek_src_rect;
+        if (isDragging){
+            seek_src_rect = { 278, 0, 29, 10 };
+        } else {
+            seek_src_rect = { 248, 0, 29, 10 };        
+        }
+        SDL_Rect seek_dst_rect = { seek_x, 0, 29, 10 };
+        SDL_RenderCopy(renderer, posbar_texture, &seek_src_rect, &seek_dst_rect);
     }
-    SDL_Rect seek_dst_rect = { seek_x, 0, 29, 10 };
-    SDL_RenderCopy(renderer, posbar_texture, &seek_src_rect, &seek_dst_rect);
 
     SDL_SetRenderTarget(renderer, NULL);
 }
@@ -597,15 +602,19 @@ void format_time(unsigned int time, char *buffer, int width) {
 int print_status(enum mpd_state state) {
     switch (state) {
         case MPD_STATE_PLAY:
+            res = 1;
             return 1;
             break;
         case MPD_STATE_PAUSE:
+            res = 3;
             return 3;
             break;
         case MPD_STATE_STOP:
+            res = 0;
             return 0;
             break;
         default:
+            res = 4;
             return 4;
             break;
     }
@@ -808,25 +817,26 @@ int main(int argc, char *argv[]) {
     double fft_result[BSZ];
     int shutdown = 0;
     enum mpd_state state = mpd_status_get_state(status);
+    ssize_t read_count;
     while (!shutdown) {
-        ssize_t read_count = read(fd, buf, sizeof(short) * BSZ);
+        if (res == 1 || res == 3) {
+            read_count = read(fd, buf, sizeof(short) * BSZ);
+        } else {
+            memset(buf, 0, sizeof(buf));
+            read_count = BSZ; // Simulate full buffer of zeros
+        }
+
         if (read_count > 0) {
             for (int i = 0; i < BSZ; i++) {
                 double window = hann(i, BSZ);
-                in[i][0] = buf[i] * window; // apply Hann window to real part
-                in[i][1] = 0.0;              // imaginary part remains 0
+                in[i][0] = buf[i] * window; // Apply Hann window to real part
+                in[i][1] = 0.0;             // Imaginary part remains 0
             }
             fftw_execute(p);
 
             for (int i = 0; i < BSZ; i++) {
-                fft_result[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // magnitude
+                fft_result[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // Magnitude
             }
-        } else if (read_count == 0) {
-            // No data available, do something else or continue
-        } else if (read_count == -1 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            // Error occurred
-            fprintf(stderr, "Error reading from FIFO: %s\n", strerror(errno));
-            break;
         }
 
         SDL_Event event;
@@ -869,7 +879,7 @@ int main(int argc, char *argv[]) {
             if (title && artist && album) {
                 song_title = std::to_string(current_song_id) + ". " + std::string(artist) + " - " + std::string(title) + " (" + std::string(album) + ")";
             } else {
-                song_title = std::string(mpd_song_get_uri(current_song));
+                song_title = std::to_string(current_song_id) + ". " + std::string(mpd_song_get_uri(current_song));
             }
 
             if (bitrate > 0) {
@@ -881,9 +891,9 @@ int main(int argc, char *argv[]) {
             }
 
             mpd_song_free(current_song);
-        } else {
+        } /* else {
             song_title = "No current song";
-        }
+        } */
 
         //printf(bitrate_info.c_str());
         current_song_id = getCurrentSongID(conn);
