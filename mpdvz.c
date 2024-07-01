@@ -25,6 +25,8 @@ int res = 0;
 
 const int mult = 2;
 
+float total_time = 0;
+
 bool isDragging = false;
 int mouseX, mouseY;
 unsigned int current_song_id = 0;
@@ -126,9 +128,48 @@ void render_to_master(SDL_Renderer *renderer, SDL_Texture *texture, SDL_Rect *ta
     SDL_RenderPresent(renderer);
 }
 
-void render_waveform(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer, int length, Color *osc_colors) {
+// C-weighting filter coefficients calculation
+double c_weighting(double freq) {
+    double f2 = freq * freq;
+    // Adjust these constants to change the weighting curve
+    double f2_plus_20_6_squared = f2 + 40.6 * 40.6;  // Low-frequency pole
+    double f2_plus_12200_squared = f2 + 2200 * 2200;  // High-frequency pole
+
+    // Original constant is 1.0072; lower it to reduce overall high-frequency gain
+    double constant = 1.2;  // Adjust this constant to decrease high frequency gain
+    
+    double r = (f2 * (f2 + 1.94e5)) / (f2_plus_20_6_squared * f2_plus_12200_squared);
+    return r * constant;
+}
+
+void render_vis(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer, double *fft_data, int length, Color *osc_colors) {
     SDL_SetRenderTarget(renderer, texture);
     clearRenderer(renderer);
+
+    double sample[BSZ];
+    int bufferSize = length; // Assuming the length is passed as the size of buffer
+    int targetSize = 75;
+    int lower = 8192;
+    
+    // Calculate C-weighting for each FFT bin frequency
+    double c_weighting_factors[bufferSize / 2];
+    for (int i = 0; i < bufferSize / 2; ++i) {
+        double freq = (double)i * 44100 / bufferSize;
+        c_weighting_factors[i] = c_weighting(freq);
+    }
+
+    // Apply C-weighting to the FFT data
+    double weighted_buffer[bufferSize / 2];
+    for (int i = 0; i < bufferSize / 2; ++i) {
+        weighted_buffer[i] = fft_data[i] * c_weighting_factors[i];
+    }
+
+    // Calculate the maximum frequency index (half the buffer size for real-valued FFT)
+    int maxFreqIndex = bufferSize / 2;
+
+    // Logarithmic scale factor
+    double logMaxFreqIndex = log10(maxFreqIndex);
+    double logMinFreqIndex = 0;  // log10(1) == 0
     
         for (int x = 0; x < 75; x++) {
             int buffer_index = (x * length) / 75;
@@ -153,55 +194,12 @@ void render_waveform(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer
             int color_index = (top) % 16;
             Color scope_color = osc_colors[color_index];
 
-            for (int dy = top; dy <= bottom; dy++) {
-                drawRect(renderer, x, dy, 1, scope_color);
+            if (VisMode == 1){
+                for (int dy = top; dy <= bottom; dy++) {
+                    drawRect(renderer, x, dy, 1, scope_color);
+                }
             }
         }
-    
-    SDL_SetRenderTarget(renderer, NULL);
-}
-
-// C-weighting filter coefficients calculation
-double c_weighting(double freq) {
-    double f2 = freq * freq;
-    // Adjust these constants to change the weighting curve
-    double f2_plus_20_6_squared = f2 + 40.6 * 40.6;  // Low-frequency pole
-    double f2_plus_12200_squared = f2 + 2200 * 2200;  // High-frequency pole
-
-    // Original constant is 1.0072; lower it to reduce overall high-frequency gain
-    double constant = 1.2;  // Adjust this constant to decrease high frequency gain
-    
-    double r = (f2 * (f2 + 1.94e5)) / (f2_plus_20_6_squared * f2_plus_12200_squared);
-    return r * constant;
-}
-
-void render_spec(SDL_Renderer *renderer, SDL_Texture *texture, double *buffer, int length) {
-    SDL_SetRenderTarget(renderer, texture);
-    clearRenderer(renderer);
-    double sample[BSZ];
-    int bufferSize = length; // Assuming the length is passed as the size of buffer
-    int targetSize = 75;
-    int lower = 8192;
-    
-    // Calculate C-weighting for each FFT bin frequency
-    double c_weighting_factors[bufferSize / 2];
-    for (int i = 0; i < bufferSize / 2; ++i) {
-        double freq = (double)i * 44100 / bufferSize;
-        c_weighting_factors[i] = c_weighting(freq);
-    }
-
-    // Apply C-weighting to the FFT data
-    double weighted_buffer[bufferSize / 2];
-    for (int i = 0; i < bufferSize / 2; ++i) {
-        weighted_buffer[i] = buffer[i] * c_weighting_factors[i];
-    }
-
-    // Calculate the maximum frequency index (half the buffer size for real-valued FFT)
-    int maxFreqIndex = bufferSize / 2;
-
-    // Logarithmic scale factor
-    double logMaxFreqIndex = log10(maxFreqIndex);
-    double logMinFreqIndex = 0;  // log10(1) == 0
 
     for (int x = 0; x < targetSize; x++) {
         // Calculate the logarithmic index with intensity adjustment
@@ -288,6 +286,7 @@ void render_spec(SDL_Renderer *renderer, SDL_Texture *texture, double *buffer, i
     {
         sapeaks[x] = 0;
     }
+    if (VisMode == 0){
         if ((x == i + 3 && x < 72) && sa_thick) {
             // skip rendering
             } else {
@@ -307,7 +306,8 @@ void render_spec(SDL_Renderer *renderer, SDL_Texture *texture, double *buffer, i
                 }
             }
         }
-    
+    }
+
     SDL_SetRenderTarget(renderer, NULL);
 }
 
@@ -496,7 +496,7 @@ void draw_progress_bar(SDL_Renderer *renderer, SDL_Texture *progress_texture, SD
     SDL_Rect dst_bg = { 0, 0, 248, 10 };
     SDL_RenderCopy(renderer, posbar_texture, &src_bg, &dst_bg);
 
-    if (res == 1 || res == 3){
+    if (res == 1 && total_time != 0.000000 || res == 3 && total_time != 0.000000){
         // Draw the seek button
         SDL_Rect seek_src_rect;
         if (isDragging){
@@ -763,7 +763,7 @@ int main(int argc, char *argv[]) {
     }
 
     SDL_Texture *master_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, WIDTH*mult, HEIGHT*mult);
-    SDL_Texture *waveform_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 75, 16);
+    SDL_Texture *vis_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 75, 16);
     SDL_Texture *spec_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 75, 16);
     SDL_Texture *num_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 63, 13);
     SDL_SetTextureBlendMode(num_texture, SDL_BLENDMODE_BLEND);  // Enable alpha blending for transparency
@@ -773,6 +773,7 @@ int main(int argc, char *argv[]) {
     SDL_Texture *khznum_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 10, 6);
     SDL_Texture *progress_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 248, 10);
     SDL_Texture *titleb_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, WIDTH, 14);
+    SDL_Texture *clutt_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 8, 43);
     SDL_Texture *mons_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 56, 12);
 
     // Load image and create texture
@@ -928,7 +929,6 @@ int main(int argc, char *argv[]) {
     SDL_SetWindowHitTest(window, HitTestCallback, 0);
 
     float time = 0;
-    float total_time = 0;
     int seek_x = 0;
     int channels;
     char time_str[6]; // buffer to hold the formatted string "MM:SS"
@@ -1026,6 +1026,7 @@ int main(int argc, char *argv[]) {
             const char *title = mpd_song_get_tag(current_song, MPD_TAG_TITLE, 0);
             const char *artist = mpd_song_get_tag(current_song, MPD_TAG_ARTIST, 0);
             const char *album = mpd_song_get_tag(current_song, MPD_TAG_ALBUM, 0);
+            //const char *track = mpd_song_get_tag(current_song, MPD_TAG_TRACK, 0);
             
             // Fetching bitrate from status
             int bitrate = mpd_status_get_kbit_rate(status);
@@ -1038,15 +1039,23 @@ int main(int argc, char *argv[]) {
             if (title && artist && album) {
                 song_title = std::to_string(current_song_id) + ". " + std::string(artist) + " - " + std::string(title) + " (" + std::string(album) + ")";
             } else {
-                song_title = std::to_string(current_song_id) + ". " + std::string(mpd_song_get_uri(current_song));
+                song_title = std::to_string(current_song_id) + ". " + std::string(title);
             }
 
             if (bitrate > 0) {
                 bitrate_info = std::to_string(bitrate);
+            } else {
+                if (res == 1 || res == 3){
+                    bitrate_info = "0";
+                }
             }
 
             if (sample_rate > 0) {
                 sample_rate_info = std::to_string(sample_rate / 1000.0);
+            } else {
+                if (res == 1 || res == 3){
+                    sample_rate_info = "0";
+                }
             }
 
             mpd_song_free(current_song);
@@ -1092,11 +1101,8 @@ int main(int argc, char *argv[]) {
 
         format_time(time, time_str, sizeof(time_str));
 
-        render_waveform(renderer, waveform_texture, buf, BSZ, osc_colors);
-        render_spec(renderer, spec_texture, fft_result, BSZ);
-        // Example text rendering
+        render_vis(renderer, vis_texture, buf, fft_result, BSZ, osc_colors);
         draw_numtext(renderer, numfont_texture, num_texture, time_str, 0, 0);
-        // Example text rendering
         draw_text(renderer, font_texture, text_texture, wide_stream.str().c_str(), 0, 0);
         draw_text(renderer, font_texture, bitratenum_texture, wide_bit.str().c_str(), 0, 0);
         draw_text(renderer, font_texture, khznum_texture, wide_khz.str().c_str(), 0, 0);
@@ -1116,7 +1122,7 @@ int main(int argc, char *argv[]) {
             posplay = 28;
         }
 
-        SDL_Rect dst_rect_waveform = {24*mult, 43*mult, 75*mult, 16*mult};
+        SDL_Rect dst_rect_vis = {24*mult, 43*mult, 75*mult, 16*mult};
         SDL_Rect dst_rect_spec = {24*mult, 43*mult, 75*mult, 16*mult};
         SDL_Rect dst_rect_image = {0, 0, WIDTH*mult, 116*mult}; // position and size for the image
         SDL_Rect dst_rect_image2 = {36*mult, 26*mult, 63*mult, 13*mult}; // position and size for the image
@@ -1126,23 +1132,16 @@ int main(int argc, char *argv[]) {
         SDL_Rect dst_rect_font3 = {156*mult, 43*mult, 10*mult, 6*mult}; // position and size for the image
         SDL_Rect dst_rect_posbar = {16*mult, 72*mult, 248*mult, 10*mult}; 
         SDL_Rect dst_rect_titlb = {0, 0, WIDTH*mult, 14*mult}; 
-        SDL_Rect dst_rect_mon = {212*mult, 41*mult, 56*mult, 12*mult}; 
+        SDL_Rect dst_rect_mon = {212*mult, 41*mult, 56*mult, 12*mult};
+
+        SDL_Rect src_rect_clutterbar = {304, 0, 8, 43};
+        SDL_Rect dst_rect_clutterbar = {10*mult, 22*mult, 8*mult, 43*mult}; 
 
         // Set blend mode for renderer to enable transparency
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
         SDL_RenderCopy(renderer, image_texture, NULL, &dst_rect_image); // render the image
-        switch (VisMode) {
-            case 0:
-                SDL_RenderCopy(renderer, spec_texture, NULL, &dst_rect_spec);
-                break;
-            case 1:
-                SDL_RenderCopy(renderer, waveform_texture, NULL, &dst_rect_waveform);
-                break;
-            case 2:
-                // SORRY NOTHING
-                break;
-        }
+        SDL_RenderCopy(renderer, vis_texture, NULL, &dst_rect_vis);
         SDL_RenderCopy(renderer, num_texture, NULL, &dst_rect_image2);
         SDL_RenderCopy(renderer, playpaus_texture, &src_rect, &dst_rect_play);
         SDL_RenderCopy(renderer, text_texture, NULL, &dst_rect_font);
@@ -1150,6 +1149,7 @@ int main(int argc, char *argv[]) {
         SDL_RenderCopy(renderer, khznum_texture, NULL, &dst_rect_font3);
         SDL_RenderCopy(renderer, progress_texture, NULL, &dst_rect_posbar);
         SDL_RenderCopy(renderer, titleb_texture, NULL, &dst_rect_titlb);
+        SDL_RenderCopy(renderer, titlebar_texture, &src_rect_clutterbar, &dst_rect_clutterbar);
         SDL_RenderCopy(renderer, mons_texture, NULL, &dst_rect_mon);
 
         SDL_SetRenderTarget(renderer, NULL);
@@ -1175,7 +1175,7 @@ int main(int argc, char *argv[]) {
 
     //fclose(ptr_file);
     SDL_DestroyTexture(image_texture);
-    SDL_DestroyTexture(waveform_texture);
+    SDL_DestroyTexture(vis_texture);
     SDL_DestroyTexture(spec_texture);
     SDL_DestroyTexture(master_texture);
     SDL_DestroyRenderer(renderer);
