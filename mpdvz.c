@@ -511,6 +511,49 @@ void draw_progress_bar(SDL_Renderer *renderer, SDL_Texture *progress_texture, SD
     SDL_SetRenderTarget(renderer, NULL);
 }
 
+void draw_titlebar(SDL_Renderer *renderer, SDL_Texture *titleb_texture, SDL_Texture *titlebar_texture, bool focus) {
+    SDL_SetRenderTarget(renderer, titleb_texture);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
+    SDL_RenderClear(renderer);
+
+     // Draw the posbar background
+    SDL_Rect src_bg;
+    if (focus) {
+        src_bg = { 27, 0, WIDTH, 14 };        
+    } else {
+        src_bg = { 27, 15, WIDTH, 14 }; 
+    }
+    SDL_Rect dst_bg = { 0, 0, WIDTH, 14 };
+    SDL_RenderCopy(renderer, titlebar_texture, &src_bg, &dst_bg);
+
+    SDL_SetRenderTarget(renderer, NULL);
+}
+
+void monoster(SDL_Renderer *renderer, SDL_Texture *mons_texture, SDL_Texture *monoster_texture, int channels) {
+    SDL_SetRenderTarget(renderer, mons_texture);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
+    SDL_RenderClear(renderer);
+
+    // Draw the posbar background
+    SDL_Rect stereo, mono;
+    if (channels == 2) {
+        mono = { 29, 12, 29, 12 };
+        stereo = { 0, 0, 29, 12 };        
+    } else if (channels == 1) {
+        mono = { 29, 0, 29, 12 };
+        stereo = { 0, 12, 29, 12 }; 
+    } else {
+        mono = { 29, 12, 29, 12 };
+        stereo = { 0, 12, 29, 12 }; 
+    }
+    SDL_Rect dst_stereo = { 27, 0, 29, 12 };
+    SDL_Rect dst_mono = { 0, 0, 29, 12 };
+    SDL_RenderCopy(renderer, monoster_texture, &mono, &dst_mono);
+    SDL_RenderCopy(renderer, monoster_texture, &stereo, &dst_stereo);
+
+    SDL_SetRenderTarget(renderer, NULL);
+}
+
 const int POSBAR_WIDTH = 248;
 const int SEEK_BUTTON_WIDTH = 29;
 
@@ -522,34 +565,32 @@ void handleMouseEvent(SDL_Event &e, int &seek_x, float &elapsed_time, float tota
 
     if (e.type == SDL_MOUSEBUTTONDOWN) {
         SDL_GetMouseState(&mouseX, &mouseY);
-        if (mouseX >= posbar_x && mouseX <= posbar_x + posbar_w && mouseY >= posbar_y && mouseY <= posbar_y + posbar_h) {
+        if ((mouseX / mult) >= posbar_x && (mouseX / mult) <= posbar_x + posbar_w && mouseY >= posbar_y && mouseY <= posbar_y + posbar_h) {
             isDragging = true;
-            seek_x = mouseX - posbar_x - (SEEK_BUTTON_WIDTH / 2);  // Adjust for button width
+            seek_x = (mouseX / mult) - posbar_x - ((SEEK_BUTTON_WIDTH / mult) / 2);  // Adjust for button width
             if (seek_x < 0) seek_x = 0;
-            if (seek_x > posbar_w - SEEK_BUTTON_WIDTH) seek_x = posbar_w - SEEK_BUTTON_WIDTH;  // Adjust for button width
+            if (seek_x > posbar_w - (SEEK_BUTTON_WIDTH / mult)) seek_x = posbar_w - (SEEK_BUTTON_WIDTH / mult);  // Adjust for button width
         }
     }
 
     if (e.type == SDL_MOUSEMOTION) {
         if (isDragging) {
             SDL_GetMouseState(&mouseX, &mouseY);
-            seek_x = mouseX - posbar_x - (SEEK_BUTTON_WIDTH / 2);  // Adjust for button width
+            seek_x = (mouseX / mult) - posbar_x - ((SEEK_BUTTON_WIDTH / mult) / 2);  // Adjust for button width
             if (seek_x < 0) seek_x = 0;
-            if (seek_x > posbar_w - SEEK_BUTTON_WIDTH) seek_x = posbar_w - SEEK_BUTTON_WIDTH;  // Adjust for button width
+            if (seek_x > posbar_w - (SEEK_BUTTON_WIDTH / mult)) seek_x = posbar_w - (SEEK_BUTTON_WIDTH / mult);  // Adjust for button width
         }
     }
 
     if (e.type == SDL_MOUSEBUTTONUP) {
         if (isDragging) {
             isDragging = false;
-            int pos = seek_x + (SEEK_BUTTON_WIDTH / 2);  // Adjust for button width
+            int pos = seek_x;
             float progress = static_cast<float>(pos) / (POSBAR_WIDTH - SEEK_BUTTON_WIDTH);
             elapsed_time = static_cast<int>(progress * total_time);
             // Send command to MPD to set the time
             if (mpd_send_seek_id(conn, current_song_id, elapsed_time)) {
                 mpd_response_finish(conn);
-            } else {
-                std::cerr << "Failed to seek: " << mpd_connection_get_error_message(conn) << std::endl;
             }
         }
     }
@@ -624,6 +665,72 @@ double hann(int n, int N) {
     return 0.5 * (1 - cos(2 * M_PI * n / (N - 1)));
 }
 
+bool HasWindowFocus(SDL_Window* window)
+{
+    uint32_t flags = SDL_GetWindowFlags(window);
+    // We *don't* want to check mouse focus:
+    // SDL_WINDOW_INPUT_FOCUS - input is going to the window
+    // SDL_WINDOW_MOUSE_FOCUS - mouse is hovered over the window, regardless of window focus
+    return (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
+#define MOUSE_GRAB_PADDING 10
+
+SDL_HitTestResult HitTestCallback(SDL_Window *Window, const SDL_Point *Area, void *Data)
+{
+    int Width, Height;
+    SDL_GetWindowSize(Window, &Width, &Height);
+
+    // Draggable area
+    int draggableWidth = Width * mult;
+    int draggableHeight = 14 * mult;
+
+    if(Area->y < MOUSE_GRAB_PADDING)
+    {
+        if(Area->x < MOUSE_GRAB_PADDING)
+        {
+            return SDL_HITTEST_RESIZE_TOPLEFT;
+        }
+        else if(Area->x > Width - MOUSE_GRAB_PADDING)
+        {
+            return SDL_HITTEST_RESIZE_TOPRIGHT;
+        }
+        else
+        {
+            return SDL_HITTEST_RESIZE_TOP;
+        }
+    }
+    else if(Area->y > Height - MOUSE_GRAB_PADDING)
+    {
+        if(Area->x < MOUSE_GRAB_PADDING)
+        {
+            return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+        }
+        else if(Area->x > Width - MOUSE_GRAB_PADDING)
+        {
+            return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+        }
+        else
+        {
+            return SDL_HITTEST_RESIZE_BOTTOM;
+        }
+    }
+    else if(Area->x < MOUSE_GRAB_PADDING)
+    {
+        return SDL_HITTEST_RESIZE_LEFT;
+    }
+    else if(Area->x > Width - MOUSE_GRAB_PADDING)
+    {
+        return SDL_HITTEST_RESIZE_RIGHT;
+    }
+    else if(Area->y < draggableHeight && Area->x < draggableWidth)
+    {
+        return SDL_HITTEST_DRAGGABLE;
+    }
+
+    return SDL_HITTEST_NORMAL; // Return normal if not in draggable area
+}
+
 int main(int argc, char *argv[]) {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "Could not initialize SDL2: %s\n", SDL_GetError());
@@ -638,7 +745,7 @@ int main(int argc, char *argv[]) {
 
     SDL_Window *window = SDL_CreateWindow("MPDamp",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                          WIDTH*mult, HEIGHT*mult, SDL_WINDOW_SHOWN);
+                                          WIDTH*mult, HEIGHT*mult, SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS);
     if (!window) {
         fprintf(stderr, "Could not create window: %s\n", SDL_GetError());
         IMG_Quit();
@@ -665,6 +772,8 @@ int main(int argc, char *argv[]) {
     SDL_Texture *bitratenum_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 15, 6);
     SDL_Texture *khznum_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 10, 6);
     SDL_Texture *progress_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 248, 10);
+    SDL_Texture *titleb_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, WIDTH, 14);
+    SDL_Texture *mons_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 56, 12);
 
     // Load image and create texture
     SDL_Surface *image_surface = IMG_Load("main.bmp");
@@ -773,10 +882,57 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Load image and create texture
+    SDL_Surface *titlebar_surface = IMG_Load("titlebar.bmp");
+    if (!image_surface) {
+        fprintf(stderr, "Could not load image: %s\n", IMG_GetError());
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        return 1;
+    }
+    
+    SDL_Texture *titlebar_texture = SDL_CreateTextureFromSurface(renderer, titlebar_surface);
+    SDL_FreeSurface(titlebar_surface);
+    if (!titlebar_texture) {
+        fprintf(stderr, "Could not create texture from surface: %s\n", SDL_GetError());
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        return 1;
+    }
+
+    SDL_Surface *monoster_surface = IMG_Load("monoster.bmp");
+    if (!image_surface) {
+        fprintf(stderr, "Could not load image: %s\n", IMG_GetError());
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        return 1;
+    }
+    
+    SDL_Texture *monoster_texture = SDL_CreateTextureFromSurface(renderer, monoster_surface);
+    SDL_FreeSurface(monoster_surface);
+    if (!titlebar_texture) {
+        fprintf(stderr, "Could not create texture from surface: %s\n", SDL_GetError());
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        return 1;
+    }
+
+    SDL_SetWindowHitTest(window, HitTestCallback, 0);
+
     float time = 0;
     float total_time = 0;
     int seek_x = 0;
+    int channels;
     char time_str[6]; // buffer to hold the formatted string "MM:SS"
+    bool hasfocus;
     struct mpd_connection *conn = mpd_connection_new(NULL, 0, 0);
     if (mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
         fprintf(stderr, "Error connecting to MPD: %s\n", mpd_connection_get_error_message(conn));
@@ -864,6 +1020,8 @@ int main(int argc, char *argv[]) {
         std::string bitrate_info;
         std::string sample_rate_info;
 
+        hasfocus = HasWindowFocus(window);
+
         if (current_song != NULL) {
             const char *title = mpd_song_get_tag(current_song, MPD_TAG_TITLE, 0);
             const char *artist = mpd_song_get_tag(current_song, MPD_TAG_ARTIST, 0);
@@ -875,6 +1033,7 @@ int main(int argc, char *argv[]) {
             // Fetching sample rate from audio format
             const struct mpd_audio_format *audio_format = mpd_status_get_audio_format(status);
             int sample_rate = (audio_format != NULL) ? audio_format->sample_rate : 0;
+            channels = (audio_format != NULL) ? audio_format->channels : 0;
 
             if (title && artist && album) {
                 song_title = std::to_string(current_song_id) + ". " + std::string(artist) + " - " + std::string(title) + " (" + std::string(album) + ")";
@@ -943,6 +1102,8 @@ int main(int argc, char *argv[]) {
         draw_text(renderer, font_texture, khznum_texture, wide_khz.str().c_str(), 0, 0);
         updateSeekPosition(seek_x, time, total_time);
         draw_progress_bar(renderer, progress_texture, posbar_texture, seek_x);
+        draw_titlebar(renderer, titleb_texture, titlebar_texture, hasfocus);
+        monoster(renderer, mons_texture, monoster_texture, channels);
         //printf(song_title.c_str());
 
         SDL_SetRenderTarget(renderer, master_texture);
@@ -957,13 +1118,15 @@ int main(int argc, char *argv[]) {
 
         SDL_Rect dst_rect_waveform = {24*mult, 43*mult, 75*mult, 16*mult};
         SDL_Rect dst_rect_spec = {24*mult, 43*mult, 75*mult, 16*mult};
-        SDL_Rect dst_rect_image = {0, 0, 275*mult, 116*mult}; // position and size for the image
+        SDL_Rect dst_rect_image = {0, 0, WIDTH*mult, 116*mult}; // position and size for the image
         SDL_Rect dst_rect_image2 = {36*mult, 26*mult, 63*mult, 13*mult}; // position and size for the image
         SDL_Rect dst_rect_play = {posplay*mult, 28*mult, 9*mult, 9*mult}; // position and size for the image
         SDL_Rect dst_rect_font = {111*mult, 27*mult, 154*mult, 6*mult}; // position and size for the image
         SDL_Rect dst_rect_font2 = {111*mult, 43*mult, 15*mult, 6*mult}; // position and size for the image
         SDL_Rect dst_rect_font3 = {156*mult, 43*mult, 10*mult, 6*mult}; // position and size for the image
         SDL_Rect dst_rect_posbar = {16*mult, 72*mult, 248*mult, 10*mult}; 
+        SDL_Rect dst_rect_titlb = {0, 0, WIDTH*mult, 14*mult}; 
+        SDL_Rect dst_rect_mon = {212*mult, 41*mult, 56*mult, 12*mult}; 
 
         // Set blend mode for renderer to enable transparency
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -986,6 +1149,8 @@ int main(int argc, char *argv[]) {
         SDL_RenderCopy(renderer, bitratenum_texture, NULL, &dst_rect_font2);
         SDL_RenderCopy(renderer, khznum_texture, NULL, &dst_rect_font3);
         SDL_RenderCopy(renderer, progress_texture, NULL, &dst_rect_posbar);
+        SDL_RenderCopy(renderer, titleb_texture, NULL, &dst_rect_titlb);
+        SDL_RenderCopy(renderer, mons_texture, NULL, &dst_rect_mon);
 
         SDL_SetRenderTarget(renderer, NULL);
         SDL_RenderCopy(renderer, master_texture, NULL, NULL);
