@@ -24,6 +24,7 @@ int VisMode = 0;
 int res = 0;
 int ampstatus, bitrate, sample_rate, volume;
 bool repeat, shuffle;
+int blinking;
 
 const int mult = 2;
 
@@ -120,6 +121,12 @@ void clearRenderer(SDL_Renderer* renderer) {
     }
 }
 
+void clearTexture(SDL_Renderer *renderer, SDL_Texture *texture) {
+    SDL_SetRenderTarget(renderer, texture);
+    clearRenderer(renderer);
+    SDL_SetRenderTarget(renderer, NULL);
+}
+
 void render_to_master(SDL_Renderer *renderer, SDL_Texture *texture, SDL_Rect *target_rect) {
     SDL_SetRenderTarget(renderer, texture);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -175,7 +182,8 @@ void render_vis(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer, dou
     
         for (int x = 0; x < 75; x++) {
             int buffer_index = (x * length) / 75;
-            int y = (((buffer[buffer_index / 2] + 32768 + 1024) * 2) * 16 / 65536) - 9;
+            int y = (((buffer[buffer_index / 2] + 32768 + 1024) * 2) * 16 / 65536);
+            y = (-y) + 23;
 
             y = y < 0 ? 0 : (y > 16 - 1 ? 16 - 1 : y);
 
@@ -318,9 +326,20 @@ void draw_numtext(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture
     SDL_SetRenderTarget(renderer, texture);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
     SDL_RenderClear(renderer);
+    const char *numbers;
+    if (res == 3){
+        if (blinking == 0) {
+            numbers = "      ";
+        } else if (blinking >= 50) {
+            numbers = text;
+        }
+    } else if (res == 1) {
+        numbers = text;
+    }
+    //std::cout << blinking << std::endl;
 
     if (res == 1 || res == 3){
-        for (const char *c = text; *c != '\0'; ++c) {
+        for (const char *c = numbers; *c != '\0'; ++c) {
             int char_index = -1;
             if (*c >= '0' && *c <= '9') {
                 char_index = *c - '0';
@@ -587,7 +606,12 @@ void send_mpd_command(struct mpd_connection *conn, const char *command) {
     if (strcmp(command, "previous") == 0) {
         mpd_run_previous(conn);
     } else if (strcmp(command, "play") == 0) {
-        mpd_run_play(conn); // how do you restart playback?
+        if (res == 3) {
+            mpd_run_pause(conn, false);
+        } else {
+            mpd_run_stop(conn);
+            mpd_run_play(conn);
+        }
     } else if (strcmp(command, "pause") == 0) {
         if (ampstatus == 3){
             mpd_run_pause(conn, false);
@@ -609,15 +633,24 @@ void cbuttons(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *cbutt_texture, 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color
     SDL_RenderClear(renderer);
 
+    int i1, i2;
+    if (ampstatus == 0){
+        i1 = 1;
+        i2 = 4;
+    } else {
+        i1 = 0;
+        i2 = 5;
+    }
+
     // Button source rectangles
-    SDL_Rect buttons[5];
-    for (int i = 0; i < 5; ++i) {
+    SDL_Rect buttons[i2];
+    for (int i = i1; i < i2; ++i) {
         buttons[i] = { 23 * i, 0, 23, 18 };
     }
 
     // Button destination rectangles
-    SDL_Rect dst_buttons[5];
-    for (int i = 0; i < 5; ++i) {
+    SDL_Rect dst_buttons[i2];
+    for (int i = i1; i < i2; ++i) {
         dst_buttons[i] = { 23 * i, 0, 23, 18 };
     }
 
@@ -634,7 +667,7 @@ void cbuttons(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *cbutt_texture, 
             //std::cout << "down" << std::endl;
 
             // Check which button was clicked
-            for (int i = 0; i < 5; ++i) {
+            for (int i = i1; i < i2; ++i) {
                 if (x >= dst_buttons[i].x * mult && x < (dst_buttons[i].x + dst_buttons[i].w) * mult &&
                     y >= dst_buttons[i].y * mult && y < (dst_buttons[i].y + dst_buttons[i].h) * mult) {
                     // Offset the y-coordinate of the button source rectangle to show the clicked state
@@ -646,7 +679,7 @@ void cbuttons(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *cbutt_texture, 
             //std::cout << "up" << std::endl;
 
             // Check which button was clicked
-            for (int i = 0; i < 5; ++i) {
+            for (int i = i1; i < i2; ++i) {
                 if (x >= dst_buttons[i].x * mult && x < (dst_buttons[i].x + dst_buttons[i].w) * mult &&
                     y >= dst_buttons[i].y * mult && y < (dst_buttons[i].y + dst_buttons[i].h) * mult) {
                     // Reset the y-coordinate of the button source rectangle to the unclicked state
@@ -662,7 +695,7 @@ void cbuttons(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *cbutt_texture, 
     }
 
     // Render the buttons
-    for (int i = 0; i < 5; ++i) {
+    for (int i = i1; i < i2; ++i) {
         SDL_RenderCopy(renderer, cbuttons_texture, &buttons[i], &dst_buttons[i]);
     }
 
@@ -833,6 +866,7 @@ int main(int argc, char *argv[]) {
     SDL_Texture *clutt_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 8, 43);
     SDL_Texture *mons_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 56, 12);
     SDL_Texture *cbutt_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 114, 18);
+    SDL_SetTextureBlendMode(cbutt_texture, SDL_BLENDMODE_BLEND);
     SDL_Texture *vol_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 68, 13);
 
     // Load images and create textures
@@ -873,6 +907,11 @@ int main(int argc, char *argv[]) {
     SDL_FreeSurface(volume_surface);
 
     SDL_SetWindowHitTest(window, HitTestCallback, 0);
+
+    // you dont wanna see video memory in that box, do ya?
+    clearTexture(renderer, vis_texture);
+    SDL_Rect dst_rect_vis = {24*mult, 43*mult, 75*mult, 16*mult};
+    SDL_RenderCopy(renderer, vis_texture, NULL, &dst_rect_vis);
 
     float time = 0;
     int seek_x = 0;
@@ -1026,7 +1065,7 @@ int main(int argc, char *argv[]) {
         //std::cout << volume << std::endl;
 
         // Set source rect based on ampstatus
-        switch (ampstatus) {
+        switch (res) {
             case 1:
                 src_rect.x = 0;
                 src_rect.y = 0;
@@ -1049,9 +1088,16 @@ int main(int argc, char *argv[]) {
                 break;
         }
 
+        blinking++;
+        if (blinking == 100) {
+            blinking = 0;
+        }
+
         format_time(time, time_str, sizeof(time_str));
 
-        render_vis(renderer, vis_texture, buf, fft_result, BSZ, osc_colors);
+        if (res == 1){
+            render_vis(renderer, vis_texture, buf, fft_result, BSZ, osc_colors);
+        }
         draw_numtext(renderer, numfont_texture, num_texture, time_str, 0, 0);
         draw_text(renderer, font_texture, text_texture, wide_stream.str().c_str(), 0, 0);
         draw_text(renderer, font_texture, bitratenum_texture, wide_bit.str().c_str(), 0, 0);
@@ -1073,10 +1119,9 @@ int main(int argc, char *argv[]) {
             posplay = 28;
         }
 
-        SDL_Rect dst_rect_vis = {24*mult, 43*mult, 75*mult, 16*mult};
         SDL_Rect dst_rect_image = {0, 0, WIDTH*mult, 116*mult}; // position and size for the image
         SDL_Rect dst_rect_image2 = {36*mult, 26*mult, 63*mult, 13*mult}; // position and size for the image
-        SDL_Rect dst_rect_play = {posplay*mult, 28*mult, 9*mult, 9*mult}; // position and size for the image
+        SDL_Rect dst_rect_play = {26*mult, 28*mult, 9*mult, 9*mult}; // position and size for the image
         SDL_Rect dst_rect_font = {111*mult, 27*mult, 154*mult, 6*mult}; // position and size for the image
         SDL_Rect dst_rect_font2 = {111*mult, 43*mult, 15*mult, 6*mult}; // position and size for the image
         SDL_Rect dst_rect_font3 = {156*mult, 43*mult, 10*mult, 6*mult}; // position and size for the image
@@ -1101,7 +1146,9 @@ int main(int argc, char *argv[]) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
         SDL_RenderCopy(renderer, image_texture, NULL, &dst_rect_image); // render the image
-        SDL_RenderCopy(renderer, vis_texture, NULL, &dst_rect_vis);
+        if (res == 1 || res == 3){
+            SDL_RenderCopy(renderer, vis_texture, NULL, &dst_rect_vis);
+        }
         SDL_RenderCopy(renderer, num_texture, NULL, &dst_rect_image2);
         SDL_RenderCopy(renderer, playpaus_texture, &src_rect, &dst_rect_play);
         if (res == 1){
