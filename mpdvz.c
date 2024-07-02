@@ -1135,7 +1135,10 @@ int main(int argc, char *argv[]) {
         SDL_Rect dst_rect_mon = {212*mult, 41*mult, 56*mult, 12*mult};
 
         SDL_Rect src_rect_clutterbar = {304, 0, 8, 43};
-        SDL_Rect dst_rect_clutterbar = {10*mult, 22*mult, 8*mult, 43*mult}; 
+        SDL_Rect dst_rect_clutterbar = {10*mult, 22*mult, 8*mult, 43*mult};
+        // maybe they'll be some more sophisticated handling for this, iunno
+        SDL_Rect src_rect_greenled = {36, 0, 3, 9};
+        SDL_Rect dst_rect_greenled = {24*mult, 28*mult, 3*mult, 9*mult};
 
         // Set blend mode for renderer to enable transparency
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -1144,6 +1147,9 @@ int main(int argc, char *argv[]) {
         SDL_RenderCopy(renderer, vis_texture, NULL, &dst_rect_vis);
         SDL_RenderCopy(renderer, num_texture, NULL, &dst_rect_image2);
         SDL_RenderCopy(renderer, playpaus_texture, &src_rect, &dst_rect_play);
+        if (res == 1){
+            SDL_RenderCopy(renderer, playpaus_texture, &src_rect_greenled, &dst_rect_greenled);
+        }
         SDL_RenderCopy(renderer, text_texture, NULL, &dst_rect_font);
         SDL_RenderCopy(renderer, bitratenum_texture, NULL, &dst_rect_font2);
         SDL_RenderCopy(renderer, khznum_texture, NULL, &dst_rect_font3);
