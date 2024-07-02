@@ -22,6 +22,8 @@
 
 int VisMode = 0;
 int res = 0;
+int ampstatus, bitrate, sample_rate, volume;
+bool repeat, shuffle;
 
 const int mult = 2;
 
@@ -253,8 +255,6 @@ void render_vis(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer, dou
                 sadata2[x] = (int)sample[x];
             }
 
-        signed char y = safalloff[x];
-
         safalloff[x] = safalloff[x] - 32 / 16.0f;
 
         // okay this is really funny
@@ -431,9 +431,6 @@ void draw_text(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *t
         67  // BLANK (for remaining undefined characters)
     };
 
-    // Buffer for UTF-8 representation (assuming maximum CHARF_WIDTH)
-    char utf8_char[CHARF_WIDTH + 1];
-
     for (const wchar_t *c = text; *c != '\0'; ++c) {
         char upper_char = std::toupper(*c);  // Convert character to uppercase
 
@@ -446,10 +443,6 @@ void draw_text(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *t
 
             // Debug output
             //printf("Character: %lc, Index: %d, Col: %d, Row: %d\n", upper_char, index, col, row);
-
-            // Convert wide char to UTF-8
-            utf8_char[0] = (char)(index);  // Example conversion (adjust as per your charset)
-            utf8_char[1] = '\0';
 
             SDL_Rect src_rect = { col * CHARF_WIDTH, row * CHARF_HEIGHT, CHARF_WIDTH, CHARF_HEIGHT };
             SDL_Rect dst_rect = { x, y, CHARF_WIDTH, CHARF_HEIGHT };
@@ -464,28 +457,6 @@ void draw_text(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *t
     SDL_SetRenderTarget(renderer, NULL);
 }
 
-/* void draw_progress_bar(SDL_Renderer *renderer, SDL_Texture *progress_texture, SDL_Texture *posbar_texture, int elapsed_time, int total_time) {
-    SDL_SetRenderTarget(renderer, progress_texture);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
-    SDL_RenderClear(renderer);
-
-    // Draw the posbar background
-    SDL_Rect src_bg = { 0, 0, 248, 10 };
-    SDL_Rect dst_bg = { 0, 0, 248, 10 };
-    SDL_RenderCopy(renderer, posbar_texture, &src_bg, &dst_bg);
-
-    // Calculate the position of the seek button
-    float progress = (total_time > 0) ? static_cast<float>(elapsed_time) / total_time : 0;
-    int seek_x = static_cast<int>(progress * (248 - 29));
-
-    // Seek button
-    SDL_Rect seek_src_rect = { 248, 0, 29, 10 };
-    SDL_Rect seek_dst_rect = { seek_x, 0, 29, 10 };
-    SDL_RenderCopy(renderer, posbar_texture, &seek_src_rect, &seek_dst_rect);
-
-    SDL_SetRenderTarget(renderer, NULL);
-} */
-
 void draw_progress_bar(SDL_Renderer *renderer, SDL_Texture *progress_texture, SDL_Texture *posbar_texture, int seek_x) {
     SDL_SetRenderTarget(renderer, progress_texture);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
@@ -496,7 +467,7 @@ void draw_progress_bar(SDL_Renderer *renderer, SDL_Texture *progress_texture, SD
     SDL_Rect dst_bg = { 0, 0, 248, 10 };
     SDL_RenderCopy(renderer, posbar_texture, &src_bg, &dst_bg);
 
-    if (res == 1 && total_time != 0.000000 || res == 3 && total_time != 0.000000){
+    if ((res == 1 && total_time != 0.000000) || (res == 3 && total_time != 0.000000)){
         // Draw the seek button
         SDL_Rect seek_src_rect;
         if (isDragging){
@@ -563,34 +534,36 @@ void handleMouseEvent(SDL_Event &e, int &seek_x, float &elapsed_time, float tota
     int posbar_w = 248 * mult;
     int posbar_h = 10 * mult;
 
-    if (e.type == SDL_MOUSEBUTTONDOWN) {
-        SDL_GetMouseState(&mouseX, &mouseY);
-        if ((mouseX / mult) >= posbar_x && (mouseX / mult) <= posbar_x + posbar_w && mouseY >= posbar_y && mouseY <= posbar_y + posbar_h) {
-            isDragging = true;
-            seek_x = (mouseX / mult) - posbar_x - ((SEEK_BUTTON_WIDTH / mult) / 2);  // Adjust for button width
-            if (seek_x < 0) seek_x = 0;
-            if (seek_x > posbar_w - (SEEK_BUTTON_WIDTH / mult)) seek_x = posbar_w - (SEEK_BUTTON_WIDTH / mult);  // Adjust for button width
-        }
-    }
-
-    if (e.type == SDL_MOUSEMOTION) {
-        if (isDragging) {
+    if ((res == 1 && total_time != 0.000000) || (res == 3 && total_time != 0.000000)){
+        if (e.type == SDL_MOUSEBUTTONDOWN) {
             SDL_GetMouseState(&mouseX, &mouseY);
-            seek_x = (mouseX / mult) - posbar_x - ((SEEK_BUTTON_WIDTH / mult) / 2);  // Adjust for button width
-            if (seek_x < 0) seek_x = 0;
-            if (seek_x > posbar_w - (SEEK_BUTTON_WIDTH / mult)) seek_x = posbar_w - (SEEK_BUTTON_WIDTH / mult);  // Adjust for button width
+            if ((mouseX / mult) >= posbar_x && (mouseX / mult) <= posbar_x + posbar_w && mouseY >= posbar_y && mouseY <= posbar_y + posbar_h) {
+                isDragging = true;
+                seek_x = (mouseX / mult) - posbar_x - ((SEEK_BUTTON_WIDTH / mult) / 2);  // Adjust for button width
+                if (seek_x < 0) seek_x = 0;
+                if (seek_x > posbar_w - (SEEK_BUTTON_WIDTH / mult)) seek_x = posbar_w - (SEEK_BUTTON_WIDTH / mult);  // Adjust for button width
+            }
         }
-    }
 
-    if (e.type == SDL_MOUSEBUTTONUP) {
-        if (isDragging) {
-            isDragging = false;
-            int pos = seek_x;
-            float progress = static_cast<float>(pos) / (POSBAR_WIDTH - SEEK_BUTTON_WIDTH);
-            elapsed_time = static_cast<int>(progress * total_time);
-            // Send command to MPD to set the time
-            if (mpd_send_seek_id(conn, current_song_id, elapsed_time)) {
-                mpd_response_finish(conn);
+        if (e.type == SDL_MOUSEMOTION) {
+            if (isDragging) {
+                SDL_GetMouseState(&mouseX, &mouseY);
+                seek_x = (mouseX / mult) - posbar_x - ((SEEK_BUTTON_WIDTH / mult) / 2);  // Adjust for button width
+                if (seek_x < 0) seek_x = 0;
+                if (seek_x > posbar_w - (SEEK_BUTTON_WIDTH / mult)) seek_x = posbar_w - (SEEK_BUTTON_WIDTH / mult);  // Adjust for button width
+            }
+        }
+
+        if (e.type == SDL_MOUSEBUTTONUP) {
+            if (isDragging) {
+                isDragging = false;
+                int pos = seek_x;
+                float progress = static_cast<float>(pos) / (POSBAR_WIDTH - SEEK_BUTTON_WIDTH);
+                elapsed_time = static_cast<int>(progress * total_time);
+                // Send command to MPD to set the time
+                if (mpd_send_seek_id(conn, current_song_id, elapsed_time)) {
+                    mpd_response_finish(conn);
+                }
             }
         }
     }
@@ -605,13 +578,121 @@ void updateSeekPosition(int &seek_x, float elapsed_time, float total_time) {
 
 unsigned int getCurrentSongID(mpd_connection *conn) {
     struct mpd_status *status = mpd_run_status(conn);
-    if (!status) {
-        std::cerr << "Failed to get status: " << mpd_connection_get_error_message(conn) << std::endl;
-        return 0;
-    }
     unsigned int song_id = mpd_status_get_song_id(status);
     mpd_status_free(status);
     return song_id;
+}
+
+void send_mpd_command(struct mpd_connection *conn, const char *command) {
+    if (strcmp(command, "previous") == 0) {
+        mpd_run_previous(conn);
+    } else if (strcmp(command, "play") == 0) {
+        mpd_run_play(conn); // how do you restart playback?
+    } else if (strcmp(command, "pause") == 0) {
+        if (ampstatus == 3){
+            mpd_run_pause(conn, false);
+        } else {
+            mpd_run_pause(conn, true);
+        }
+
+    } else if (strcmp(command, "stop") == 0) {
+        mpd_run_stop(conn);
+    } else if (strcmp(command, "next") == 0) {
+        mpd_run_next(conn);
+    }
+    //std::cout << command << std::endl;
+}
+
+void cbuttons(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *cbutt_texture, SDL_Texture *cbuttons_texture, struct mpd_connection *conn) {
+    // Set render target to cbutt_texture
+    SDL_SetRenderTarget(renderer, cbutt_texture);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color
+    SDL_RenderClear(renderer);
+
+    // Button source rectangles
+    SDL_Rect buttons[5];
+    for (int i = 0; i < 5; ++i) {
+        buttons[i] = { 23 * i, 0, 23, 18 };
+    }
+
+    // Button destination rectangles
+    SDL_Rect dst_buttons[5];
+    for (int i = 0; i < 5; ++i) {
+        dst_buttons[i] = { 23 * i, 0, 23, 18 };
+    }
+
+    // Offset for button area on the screen
+    const int buttonAreaX = 16 * mult;
+    const int buttonAreaY = 88 * mult;
+
+    // Handle events
+    if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) {
+        int x = e.button.x - buttonAreaX;
+        int y = e.button.y - buttonAreaY;
+
+        if (e.type == SDL_MOUSEBUTTONDOWN) {
+            //std::cout << "down" << std::endl;
+
+            // Check which button was clicked
+            for (int i = 0; i < 5; ++i) {
+                if (x >= dst_buttons[i].x * mult && x < (dst_buttons[i].x + dst_buttons[i].w) * mult &&
+                    y >= dst_buttons[i].y * mult && y < (dst_buttons[i].y + dst_buttons[i].h) * mult) {
+                    // Offset the y-coordinate of the button source rectangle to show the clicked state
+                    buttons[i].y = 18;
+                    break;
+                }
+            }
+        } else if (e.type == SDL_MOUSEBUTTONUP) {
+            //std::cout << "up" << std::endl;
+
+            // Check which button was clicked
+            for (int i = 0; i < 5; ++i) {
+                if (x >= dst_buttons[i].x * mult && x < (dst_buttons[i].x + dst_buttons[i].w) * mult &&
+                    y >= dst_buttons[i].y * mult && y < (dst_buttons[i].y + dst_buttons[i].h) * mult) {
+                    // Reset the y-coordinate of the button source rectangle to the unclicked state
+                    buttons[i].y = 0;
+
+                    // Send the appropriate command to MPD
+                    const char *commands[] = { "previous", "play", "pause", "stop", "next" };
+                    send_mpd_command(conn, commands[i]);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Render the buttons
+    for (int i = 0; i < 5; ++i) {
+        SDL_RenderCopy(renderer, cbuttons_texture, &buttons[i], &dst_buttons[i]);
+    }
+
+    // Reset render target
+    SDL_SetRenderTarget(renderer, NULL);
+}
+
+void render_volume(SDL_Renderer *renderer, SDL_Texture *vol_texture, SDL_Texture *volume_texture/*, struct mpd_connection *conn*/) {
+    // Set render target to cbutt_texture
+    SDL_SetRenderTarget(renderer, vol_texture);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color
+    SDL_RenderClear(renderer);
+
+    // Map volume (0-100) to bar index (0-28)
+    int barIndex = volume * 27 / 100;
+    int barbtnIndex = volume * (68 - 14) / 100;
+
+    // Source rectangle for the volume bar
+    SDL_Rect src_vol = { 0, barIndex * 15, 68, 15 };
+    SDL_Rect src_vol_btn = { 15, 422, 14, 11 };
+
+    // Destination rectangle for rendering (you can adjust the position as needed)
+    SDL_Rect dst_vol = { 0, 0, 68, 15 };
+    SDL_Rect dst_vol_btn = { barbtnIndex, 1, 14, 11 };
+
+    // Render the volume bar
+    SDL_RenderCopy(renderer, volume_texture, &src_vol, &dst_vol);
+    SDL_RenderCopy(renderer, volume_texture, &src_vol_btn, &dst_vol_btn);
+    // Reset render target
+    SDL_SetRenderTarget(renderer, NULL);
 }
 
 void format_time(unsigned int time, char *buffer, int width) {
@@ -732,42 +813,18 @@ SDL_HitTestResult HitTestCallback(SDL_Window *Window, const SDL_Point *Area, voi
 }
 
 int main(int argc, char *argv[]) {
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        fprintf(stderr, "Could not initialize SDL2: %s\n", SDL_GetError());
-        return 1;
-    }
-
-    if (!(IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG)) {
-        fprintf(stderr, "Could not initialize SDL_image: %s\n", IMG_GetError());
-        SDL_Quit();
-        return 1;
-    }
 
     SDL_Window *window = SDL_CreateWindow("MPDamp",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           WIDTH*mult, HEIGHT*mult, SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS);
-    if (!window) {
-        fprintf(stderr, "Could not create window: %s\n", SDL_GetError());
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
 
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (!renderer) {
-        fprintf(stderr, "Could not create renderer: %s\n", SDL_GetError());
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
 
     SDL_Texture *master_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, WIDTH*mult, HEIGHT*mult);
     SDL_Texture *vis_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 75, 16);
     SDL_Texture *spec_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 75, 16);
     SDL_Texture *num_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 63, 13);
     SDL_SetTextureBlendMode(num_texture, SDL_BLENDMODE_BLEND);  // Enable alpha blending for transparency
-    SDL_Texture *play_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 9, 9);
     SDL_Texture *text_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 154, 6);
     SDL_Texture *bitratenum_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 15, 6);
     SDL_Texture *khznum_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 10, 6);
@@ -775,156 +832,45 @@ int main(int argc, char *argv[]) {
     SDL_Texture *titleb_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, WIDTH, 14);
     SDL_Texture *clutt_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 8, 43);
     SDL_Texture *mons_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 56, 12);
+    SDL_Texture *cbutt_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 114, 18);
+    SDL_Texture *vol_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 68, 13);
 
-    // Load image and create texture
+    // Load images and create textures
     SDL_Surface *image_surface = IMG_Load("main.bmp");
-    if (!image_surface) {
-        fprintf(stderr, "Could not load image: %s\n", IMG_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
-    
     SDL_Texture *image_texture = SDL_CreateTextureFromSurface(renderer, image_surface);
     SDL_FreeSurface(image_surface);
-    if (!image_texture) {
-        fprintf(stderr, "Could not create texture from surface: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
 
-    // Load font image and create texture
     SDL_Surface *numfont_surface = IMG_Load("numbers.bmp");
-    if (!numfont_surface) {
-        fprintf(stderr, "Could not load font image: %s\n", IMG_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
     SDL_Texture *numfont_texture = SDL_CreateTextureFromSurface(renderer, numfont_surface);
     SDL_FreeSurface(numfont_surface);
-    if (!numfont_texture) {
-        fprintf(stderr, "Could not create texture from font surface: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
 
-    // Load font image and create texture
     SDL_Surface *font_surface = IMG_Load("text.bmp");
-    if (!font_surface) {
-        fprintf(stderr, "Could not load font image: %s\n", IMG_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
     SDL_Texture *font_texture = SDL_CreateTextureFromSurface(renderer, font_surface);
     SDL_FreeSurface(font_surface);
-    if (!font_texture) {
-        fprintf(stderr, "Could not create texture from font surface: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
-    
-    // Load image and create texture
+
     SDL_Surface *play_surface = IMG_Load("playpaus.bmp");
-    if (!play_surface) {
-        fprintf(stderr, "Could not load image: %s\n", IMG_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
-    
     SDL_Texture *playpaus_texture = SDL_CreateTextureFromSurface(renderer, play_surface);
     SDL_FreeSurface(play_surface);
-    if (!playpaus_texture) {
-        fprintf(stderr, "Could not create texture from surface: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
 
     SDL_Surface *bmp = IMG_Load("posbar.bmp");
-    if (bmp == nullptr) {
-        std::cerr << "IMG_Load Error: " << IMG_GetError() << std::endl;
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
-
     SDL_Texture *posbar_texture = SDL_CreateTextureFromSurface(renderer, bmp);
     SDL_FreeSurface(bmp);
-    if (posbar_texture == nullptr) {
-        std::cerr << "SDL_CreateTextureFromSurface Error: " << SDL_GetError() << std::endl;
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
 
-    // Load image and create texture
     SDL_Surface *titlebar_surface = IMG_Load("titlebar.bmp");
-    if (!image_surface) {
-        fprintf(stderr, "Could not load image: %s\n", IMG_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
-    
     SDL_Texture *titlebar_texture = SDL_CreateTextureFromSurface(renderer, titlebar_surface);
     SDL_FreeSurface(titlebar_surface);
-    if (!titlebar_texture) {
-        fprintf(stderr, "Could not create texture from surface: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
 
     SDL_Surface *monoster_surface = IMG_Load("monoster.bmp");
-    if (!image_surface) {
-        fprintf(stderr, "Could not load image: %s\n", IMG_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
-    
     SDL_Texture *monoster_texture = SDL_CreateTextureFromSurface(renderer, monoster_surface);
     SDL_FreeSurface(monoster_surface);
-    if (!titlebar_texture) {
-        fprintf(stderr, "Could not create texture from surface: %s\n", SDL_GetError());
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        IMG_Quit();
-        SDL_Quit();
-        return 1;
-    }
+
+    SDL_Surface *cbuttons_surface = IMG_Load("cbuttons.bmp");
+    SDL_Texture *cbuttons_texture = SDL_CreateTextureFromSurface(renderer, cbuttons_surface);
+    SDL_FreeSurface(cbuttons_surface);
+
+    SDL_Surface *volume_surface = IMG_Load("volume.bmp");
+    SDL_Texture *volume_texture = SDL_CreateTextureFromSurface(renderer, volume_surface);
+    SDL_FreeSurface(volume_surface);
 
     SDL_SetWindowHitTest(window, HitTestCallback, 0);
 
@@ -941,11 +887,10 @@ int main(int argc, char *argv[]) {
     }
 
     struct mpd_status *status = mpd_run_status(conn);
-    if (!status) {
-        fprintf(stderr, "Error retrieving MPD status: %s\n", mpd_connection_get_error_message(conn));
-        mpd_connection_free(conn);
-        return 1;
-    }
+
+    volume = mpd_status_get_volume(status);
+    repeat = mpd_status_get_repeat(status);
+    shuffle = mpd_status_get_random(status);
 
     Color* osc_colors = osccolors(colors);
 
@@ -968,7 +913,6 @@ int main(int argc, char *argv[]) {
 
     SDL_Rect src_rect = {0, 0, 0, 0}; // Source rect for image
 
-    int ampstatus;
     short buf[BSZ];
     double fft_result[BSZ];
     int shutdown = 0;
@@ -1013,6 +957,7 @@ int main(int argc, char *argv[]) {
                 }
             }
             handleMouseEvent(event, seek_x, time, total_time, conn);
+            cbuttons(event, renderer, cbutt_texture, cbuttons_texture, conn);
         }
 
         struct mpd_song *current_song = mpd_run_current_song(conn);
@@ -1029,11 +974,11 @@ int main(int argc, char *argv[]) {
             //const char *track = mpd_song_get_tag(current_song, MPD_TAG_TRACK, 0);
             
             // Fetching bitrate from status
-            int bitrate = mpd_status_get_kbit_rate(status);
+            bitrate = mpd_status_get_kbit_rate(status);
 
             // Fetching sample rate from audio format
             const struct mpd_audio_format *audio_format = mpd_status_get_audio_format(status);
-            int sample_rate = (audio_format != NULL) ? audio_format->sample_rate : 0;
+            sample_rate = (audio_format != NULL) ? audio_format->sample_rate : 0;
             channels = (audio_format != NULL) ? audio_format->channels : 0;
 
             if (title && artist && album) {
@@ -1074,6 +1019,11 @@ int main(int argc, char *argv[]) {
         wide_khz << std::wstring(sample_rate_info.begin(), sample_rate_info.end()); // Convert std::string
 
         ampstatus = print_status(state);
+        // volume = mpd_status_get_volume(status);
+        // why's this turn the volume bar into nothing? why's putting this
+        // return bogus values like -696923407, -696923274?
+
+        //std::cout << volume << std::endl;
 
         // Set source rect based on ampstatus
         switch (ampstatus) {
@@ -1110,6 +1060,7 @@ int main(int argc, char *argv[]) {
         draw_progress_bar(renderer, progress_texture, posbar_texture, seek_x);
         draw_titlebar(renderer, titleb_texture, titlebar_texture, hasfocus);
         monoster(renderer, mons_texture, monoster_texture, channels);
+        render_volume(renderer, vol_texture, volume_texture);
         //printf(song_title.c_str());
 
         SDL_SetRenderTarget(renderer, master_texture);
@@ -1123,7 +1074,6 @@ int main(int argc, char *argv[]) {
         }
 
         SDL_Rect dst_rect_vis = {24*mult, 43*mult, 75*mult, 16*mult};
-        SDL_Rect dst_rect_spec = {24*mult, 43*mult, 75*mult, 16*mult};
         SDL_Rect dst_rect_image = {0, 0, WIDTH*mult, 116*mult}; // position and size for the image
         SDL_Rect dst_rect_image2 = {36*mult, 26*mult, 63*mult, 13*mult}; // position and size for the image
         SDL_Rect dst_rect_play = {posplay*mult, 28*mult, 9*mult, 9*mult}; // position and size for the image
@@ -1133,12 +1083,19 @@ int main(int argc, char *argv[]) {
         SDL_Rect dst_rect_posbar = {16*mult, 72*mult, 248*mult, 10*mult}; 
         SDL_Rect dst_rect_titlb = {0, 0, WIDTH*mult, 14*mult}; 
         SDL_Rect dst_rect_mon = {212*mult, 41*mult, 56*mult, 12*mult};
+        SDL_Rect dst_rect_cb = {16*mult, 88*mult, 114*mult, 18*mult};
+        SDL_Rect dst_rect_vol = {107*mult, 57*mult, 68*mult, 13*mult};
 
         SDL_Rect src_rect_clutterbar = {304, 0, 8, 43};
         SDL_Rect dst_rect_clutterbar = {10*mult, 22*mult, 8*mult, 43*mult};
         // maybe they'll be some more sophisticated handling for this, iunno
-        SDL_Rect src_rect_greenled = {36, 0, 3, 9};
-        SDL_Rect dst_rect_greenled = {24*mult, 28*mult, 3*mult, 9*mult};
+        SDL_Rect src_rect_sync;
+        if ((sample_rate == 0 && bitrate == 0 && total_time == 0) || (bitrate == 0 && total_time == 0)){
+            src_rect_sync = {39, 0, 3, 9};
+        } else {
+            src_rect_sync = {36, 0, 3, 9};
+        }
+        SDL_Rect dst_rect_sync = {24*mult, 28*mult, 3*mult, 9*mult};
 
         // Set blend mode for renderer to enable transparency
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -1148,7 +1105,7 @@ int main(int argc, char *argv[]) {
         SDL_RenderCopy(renderer, num_texture, NULL, &dst_rect_image2);
         SDL_RenderCopy(renderer, playpaus_texture, &src_rect, &dst_rect_play);
         if (res == 1){
-            SDL_RenderCopy(renderer, playpaus_texture, &src_rect_greenled, &dst_rect_greenled);
+            SDL_RenderCopy(renderer, playpaus_texture, &src_rect_sync, &dst_rect_sync);
         }
         SDL_RenderCopy(renderer, text_texture, NULL, &dst_rect_font);
         SDL_RenderCopy(renderer, bitratenum_texture, NULL, &dst_rect_font2);
@@ -1157,6 +1114,8 @@ int main(int argc, char *argv[]) {
         SDL_RenderCopy(renderer, titleb_texture, NULL, &dst_rect_titlb);
         SDL_RenderCopy(renderer, titlebar_texture, &src_rect_clutterbar, &dst_rect_clutterbar);
         SDL_RenderCopy(renderer, mons_texture, NULL, &dst_rect_mon);
+        SDL_RenderCopy(renderer, cbutt_texture, NULL, &dst_rect_cb);
+        SDL_RenderCopy(renderer, vol_texture, NULL, &dst_rect_vol);
 
         SDL_SetRenderTarget(renderer, NULL);
         SDL_RenderCopy(renderer, master_texture, NULL, NULL);
