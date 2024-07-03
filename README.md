@@ -1,9 +1,11 @@
-mpdvz
-=====
+MPDamp
+======
 
-terminal visualizer for mpd
+mpd client that resembles Winamp Classic accurately
 
-![screenshot](https://raw.githubusercontent.com/sofuture/mpdvz/master/mpdvz.gif)
+Forked off of sofuture's mpdvz for the mere reason of getting audio data from mpd to visualize in a Winamp-like visualizer
+
+![screenshot](https://raw.githubusercontent.com/0x5066/MPDamp/master/screenshot.png)
 
 instructions
 ------------
@@ -14,16 +16,16 @@ put this in your mpd.conf:
         type    "fifo"
         name    "my_fifo"
         path    "/tmp/mpd.fifo"
-        format  "44100:16:2"
+        format  "44100:16:1"
     }
 
-build:
+build (and optionally run):
 
-    make
+    make && ./mpdamp
 
 run:
 
-    ./mpdvz [-h|--help] [path to mpd fifo]
+    ./mpdamp [path to mpd fifo]
 
     path defaults to /tmp/mpd.fifo
 

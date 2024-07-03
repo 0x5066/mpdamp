@@ -999,6 +999,7 @@ int main(int argc, char *argv[]) {
             cbuttons(event, renderer, cbutt_texture, cbuttons_texture, conn);
         }
 
+        struct mpd_status *status2 = mpd_run_status(conn);
         struct mpd_song *current_song = mpd_run_current_song(conn);
         std::string song_title;
         std::string bitrate_info;
@@ -1020,25 +1021,36 @@ int main(int argc, char *argv[]) {
             sample_rate = (audio_format != NULL) ? audio_format->sample_rate : 0;
             channels = (audio_format != NULL) ? audio_format->channels : 0;
 
-            if (title && artist && album) {
-                song_title = std::to_string(current_song_id) + ". " + std::string(artist) + " - " + std::string(title) + " (" + std::string(album) + ")";
-            } else {
+            if (title && artist/*  && album */) {
+                song_title = std::to_string(current_song_id) + ". " + std::string(artist) + " - " + std::string(title)/* + " (" + std::string(album) + ")"*/;
+            } else if (title) {
                 song_title = std::to_string(current_song_id) + ". " + std::string(title);
+            } else {
+                song_title = std::to_string(current_song_id) + ". " + std::string(mpd_song_get_uri(current_song));
             }
 
             if (bitrate > 0) {
-                bitrate_info = std::to_string(bitrate);
+                if (bitrate < 10){
+                    bitrate_info = "  " + std::to_string(bitrate);      
+                } else if (bitrate < 100){
+                    bitrate_info = " " + std::to_string(bitrate);      
+                } else {
+                    bitrate_info = std::to_string(bitrate);                    
+                }
             } else {
                 if (res == 1 || res == 3){
-                    bitrate_info = "0";
+                    bitrate_info = "  0";
                 }
             }
 
             if (sample_rate > 0) {
+                if (sample_rate < 10){
+                    sample_rate_info = " " + std::to_string(sample_rate / 1000.0);
+                }
                 sample_rate_info = std::to_string(sample_rate / 1000.0);
             } else {
                 if (res == 1 || res == 3){
-                    sample_rate_info = "0";
+                    sample_rate_info = " 0";
                 }
             }
 
@@ -1058,9 +1070,7 @@ int main(int argc, char *argv[]) {
         wide_khz << std::wstring(sample_rate_info.begin(), sample_rate_info.end()); // Convert std::string
 
         ampstatus = print_status(state);
-        // volume = mpd_status_get_volume(status);
-        // why's this turn the volume bar into nothing? why's putting this
-        // return bogus values like -696923407, -696923274?
+        volume = mpd_status_get_volume(status2);
 
         //std::cout << volume << std::endl;
 

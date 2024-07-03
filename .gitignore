@@ -3,3 +3,5 @@
 *.o
 mpdvz
 mpdvz_debug
+mpdamp
+mpdamp_debug
