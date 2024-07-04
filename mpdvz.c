@@ -432,8 +432,8 @@ void draw_text(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *t
         48, // !
         49, // _
         50, // +
-        51, // \
-        52, // /
+        51, // backslash
+        52, // slash
         53, // [
         54, // ]
         55, // ^
@@ -462,7 +462,11 @@ void draw_text(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *t
             int row = charset_indices[index] / (FONT_IMAGE_WIDTH / CHARF_WIDTH);
 
             // Debug output
-            //printf("Character: %lc, Index: %d, Col: %d, Row: %d\n", upper_char, index, col, row);
+            /* std::wcout << L"Character: " << upper_char 
+               << L", Index: " << index 
+               << L", Col: " << col 
+               << L", Row: " << row 
+               << std::endl; */
 
             SDL_Rect src_rect = { col * CHARF_WIDTH, row * CHARF_HEIGHT, CHARF_WIDTH, CHARF_HEIGHT };
             SDL_Rect dst_rect = { x, y, CHARF_WIDTH, CHARF_HEIGHT };
