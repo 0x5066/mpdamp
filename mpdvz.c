@@ -18,7 +18,8 @@
 
 #define WIDTH 275
 #define HEIGHT 116
-#define BSZ 768
+
+const int BSZ = 1152;
 
 int VisMode = 0;
 int res = 0;
@@ -603,6 +604,11 @@ unsigned int getCurrentSongID(mpd_connection *conn) {
 }
 
 void send_mpd_command(struct mpd_connection *conn, const char *command) {
+    if (mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
+        fprintf(stderr, "MPD connection error: %s\n", mpd_connection_get_error_message(conn));
+        return;
+    }
+
     if (strcmp(command, "previous") == 0) {
         mpd_run_previous(conn);
     } else if (strcmp(command, "play") == 0) {
@@ -624,7 +630,20 @@ void send_mpd_command(struct mpd_connection *conn, const char *command) {
     } else if (strcmp(command, "next") == 0) {
         mpd_run_next(conn);
     }
-    //std::cout << command << std::endl;
+
+    if (strcmp(command, "repeat") == 0) {
+        if (!repeat) {
+            mpd_run_repeat(conn, true);
+            repeat = true;
+        } else {
+            mpd_run_repeat(conn, false);
+            repeat = false;
+        }
+    } else if (strcmp(command, "shuffle") == 0) {
+        shuffle = !shuffle; // Toggle shuffle state
+        mpd_run_random(conn, shuffle);
+    }
+    mpd_response_finish(conn);
 }
 
 void cbuttons(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *cbutt_texture, SDL_Texture *cbuttons_texture, struct mpd_connection *conn) {
@@ -703,6 +722,77 @@ void cbuttons(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *cbutt_texture, 
     SDL_SetRenderTarget(renderer, NULL);
 }
 
+void shufrep(SDL_Event &e, SDL_Renderer *renderer, SDL_Texture *shuf_texture, SDL_Texture *shufrep_texture, struct mpd_connection *conn) {
+    // Set render target to shuf_texture
+    SDL_SetRenderTarget(renderer, shuf_texture);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color
+    SDL_RenderClear(renderer);
+
+    int shufstate = shuffle ? 30 : 0;
+    int repstate = repeat ? 30 : 0;
+
+    // Button source rectangles
+    SDL_Rect shuffleRect = { 28, shufstate, 46, 15 };
+    SDL_Rect repeatRect = { 0, repstate, 28, 15 };
+
+    // Button destination rectangles
+    SDL_Rect dst_shuffle = { 0, 0, 46, 15 };
+    SDL_Rect dst_repeat = { 46, 0, 28, 15 };  // Adjusted the position to the right of shuffle button
+
+    // Offset for button area on the screen
+    const int buttonAreaX = 164 * mult;
+    const int buttonAreaY = 89 * mult;
+
+    // Handle events
+    if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) {
+        int x = e.button.x - buttonAreaX;
+        int y = e.button.y - buttonAreaY;
+
+        if (e.type == SDL_MOUSEBUTTONDOWN) {
+            // Check if shuffle button was clicked
+            if (x >= dst_shuffle.x * mult && x < (dst_shuffle.x + dst_shuffle.w) * mult &&
+                y >= dst_shuffle.y * mult && y < (dst_shuffle.y + dst_shuffle.h) * mult) {
+                shuffleRect.y = 15 + shufstate;  // Show the clicked state
+            }
+
+            // Check if repeat button was clicked
+            if (x >= dst_repeat.x * mult && x < (dst_repeat.x + dst_repeat.w) * mult &&
+                y >= dst_repeat.y * mult && y < (dst_repeat.y + dst_repeat.h) * mult) {
+                repeatRect.y = 15 + repstate;  // Show the clicked state
+            }
+        } else if (e.type == SDL_MOUSEBUTTONUP) {
+            // Check if shuffle button was released
+            if (x >= dst_shuffle.x * mult && x < (dst_shuffle.x + dst_shuffle.w) * mult &&
+                y >= dst_shuffle.y * mult && y < (dst_shuffle.y + dst_shuffle.h) * mult) {
+                shuffleRect.y = 0 + shufstate;  // Reset to the unclicked state
+
+                // Send the shuffle command to MPD and update the state
+                send_mpd_command(conn, "shuffle");
+                shufstate = shuffle ? 30 : 0;  // Update the state
+                shuffleRect.y = shufstate;     // Update the y-coordinate for rendering
+            }
+
+            // Check if repeat button was released
+            if (x >= dst_repeat.x * mult && x < (dst_repeat.x + dst_repeat.w) * mult &&
+                y >= dst_repeat.y * mult && y < (dst_repeat.y + dst_repeat.h) * mult) {
+                repeatRect.y = 0 + repstate;  // Reset to the unclicked state
+
+                // Send the repeat command to MPD and update the state
+                send_mpd_command(conn, "repeat");
+                repstate = repeat ? 30 : 0;   // Update the state
+                repeatRect.y = repstate;      // Update the y-coordinate for rendering
+            }
+        }
+    }
+
+    // Render shuffle and repeat buttons
+    SDL_RenderCopy(renderer, shufrep_texture, &shuffleRect, &dst_shuffle);
+    SDL_RenderCopy(renderer, shufrep_texture, &repeatRect, &dst_repeat);
+
+    // Reset render target
+    SDL_SetRenderTarget(renderer, NULL);
+}
+
 void render_volume(SDL_Renderer *renderer, SDL_Texture *vol_texture, SDL_Texture *volume_texture/*, struct mpd_connection *conn*/) {
     // Set render target to cbutt_texture
     SDL_SetRenderTarget(renderer, vol_texture);
@@ -745,6 +835,14 @@ void format_time(unsigned int time, char *buffer, int width) {
 
     // Ensure null-termination
     buffer[width] = '\0';
+}
+
+const char *format_time2(unsigned int time, char *buffer) {
+    unsigned int minutes = time / 60;
+    unsigned int seconds = time % 60;
+    sprintf(buffer, "%u:%02u", minutes, seconds);
+
+    return buffer;
 }
 
 /* int res = SendMessage(hwnd_winamp,WM_WA_IPC,0,IPC_ISPLAYING);
@@ -868,6 +966,7 @@ int main(int argc, char *argv[]) {
     SDL_Texture *cbutt_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 114, 18);
     SDL_SetTextureBlendMode(cbutt_texture, SDL_BLENDMODE_BLEND);
     SDL_Texture *vol_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 68, 13);
+    SDL_Texture *shuf_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 73, 15);
 
     // Load images and create textures
     SDL_Surface *image_surface = IMG_Load("main.bmp");
@@ -906,6 +1005,10 @@ int main(int argc, char *argv[]) {
     SDL_Texture *volume_texture = SDL_CreateTextureFromSurface(renderer, volume_surface);
     SDL_FreeSurface(volume_surface);
 
+    SDL_Surface *shufrep_surface = IMG_Load("shufrep.bmp");
+    SDL_Texture *shufrep_texture = SDL_CreateTextureFromSurface(renderer, shufrep_surface);
+    SDL_FreeSurface(shufrep_surface);
+
     SDL_SetWindowHitTest(window, HitTestCallback, 0);
 
     // you dont wanna see video memory in that box, do ya?
@@ -917,6 +1020,7 @@ int main(int argc, char *argv[]) {
     int seek_x = 0;
     int channels;
     char time_str[6]; // buffer to hold the formatted string "MM:SS"
+    char time_str2[6]; // buffer to hold the formatted string "MM:SS"
     bool hasfocus;
     struct mpd_connection *conn = mpd_connection_new(NULL, 0, 0);
     if (mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
@@ -939,6 +1043,7 @@ int main(int argc, char *argv[]) {
         filename = argv[1];
     }
     int fd = open(filename, O_RDONLY | O_NONBLOCK);
+    ptr_file = fdopen(fd, "rb");
     if (fd == -1) {
         fprintf(stderr, "Error opening FIFO file: %s\n", strerror(errno));
         return 1;
@@ -965,17 +1070,15 @@ int main(int argc, char *argv[]) {
             read_count = BSZ; // Simulate full buffer of zeros
         }
 
-        if (read_count > 0) {
-            for (int i = 0; i < BSZ; i++) {
-                double window = hann(i, BSZ);
-                in[i][0] = buf[i] * window; // Apply Hann window to real part
-                in[i][1] = 0.0;             // Imaginary part remains 0
-            }
-            fftw_execute(p);
+        for (int i = 0; i < BSZ; i++) {
+            double window = hann(i, BSZ);
+            in[i][0] = buf[i] * window; // Apply Hann window to real part
+            in[i][1] = 0.0;             // Imaginary part remains 0
+        }
+        fftw_execute(p);
 
-            for (int i = 0; i < BSZ; i++) {
-                fft_result[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // Magnitude
-            }
+        for (int i = 0; i < BSZ; i++) {
+            fft_result[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // Magnitude
         }
 
         SDL_Event event;
@@ -997,9 +1100,15 @@ int main(int argc, char *argv[]) {
             }
             handleMouseEvent(event, seek_x, time, total_time, conn);
             cbuttons(event, renderer, cbutt_texture, cbuttons_texture, conn);
+            shufrep(event, renderer, shuf_texture, shufrep_texture, conn);
         }
 
         struct mpd_status *status2 = mpd_run_status(conn);
+        if (status2 == NULL) {
+            fprintf(stderr, "Error getting MPD status: %s\n", mpd_connection_get_error_message(conn));
+            mpd_connection_free(conn);
+            return 1;
+        }
         struct mpd_song *current_song = mpd_run_current_song(conn);
         std::string song_title;
         std::string bitrate_info;
@@ -1022,11 +1131,11 @@ int main(int argc, char *argv[]) {
             channels = (audio_format != NULL) ? audio_format->channels : 0;
 
             if (title && artist/*  && album */) {
-                song_title = std::to_string(current_song_id) + ". " + std::string(artist) + " - " + std::string(title)/* + " (" + std::string(album) + ")"*/;
+                song_title = std::to_string(current_song_id) + ". " + std::string(artist) + " - " + std::string(title) + " (" + std::string(format_time2(total_time, time_str2)) + ")"/* + " (" + std::string(album) + ")"*/;
             } else if (title) {
-                song_title = std::to_string(current_song_id) + ". " + std::string(title);
+                song_title = std::to_string(current_song_id) + ". " + std::string(title) + " (" + std::string(format_time2(total_time, time_str2)) + ")";
             } else {
-                song_title = std::to_string(current_song_id) + ". " + std::string(mpd_song_get_uri(current_song));
+                song_title = std::to_string(current_song_id) + ". " + std::string(mpd_song_get_uri(current_song)) + " (" + std::string(format_time2(total_time, time_str2)) + ")";
             }
 
             if (bitrate > 0) {
@@ -1070,7 +1179,13 @@ int main(int argc, char *argv[]) {
         wide_khz << std::wstring(sample_rate_info.begin(), sample_rate_info.end()); // Convert std::string
 
         ampstatus = print_status(state);
-        volume = mpd_status_get_volume(status2);
+        // this is supposed to prevent reading the volume on playback because before it starts, it's 0
+        // and that's wrong, but when an internet stream starts up, volume is 0, but the check isnt really working...
+        if (res == 1 || res == 3 || (res == 1 || res == 3) && (sample_rate != 0 && bitrate != 0 && total_time != 0) || (res == 1 || res == 3) && (bitrate != 0 && total_time != 0)){
+            volume = mpd_status_get_volume(status2);
+        }
+        repeat = mpd_status_get_repeat(status2);
+        shuffle = mpd_status_get_random(status2);
 
         //std::cout << volume << std::endl;
 
@@ -1140,6 +1255,7 @@ int main(int argc, char *argv[]) {
         SDL_Rect dst_rect_mon = {212*mult, 41*mult, 56*mult, 12*mult};
         SDL_Rect dst_rect_cb = {16*mult, 88*mult, 114*mult, 18*mult};
         SDL_Rect dst_rect_vol = {107*mult, 57*mult, 68*mult, 13*mult};
+        SDL_Rect dst_rect_shuf = {164*mult, 89*mult, 73*mult, 15*mult};
 
         SDL_Rect src_rect_clutterbar = {304, 0, 8, 43};
         SDL_Rect dst_rect_clutterbar = {10*mult, 22*mult, 8*mult, 43*mult};
@@ -1173,6 +1289,7 @@ int main(int argc, char *argv[]) {
         SDL_RenderCopy(renderer, mons_texture, NULL, &dst_rect_mon);
         SDL_RenderCopy(renderer, cbutt_texture, NULL, &dst_rect_cb);
         SDL_RenderCopy(renderer, vol_texture, NULL, &dst_rect_vol);
+        SDL_RenderCopy(renderer, shuf_texture, NULL, &dst_rect_shuf);
 
         SDL_SetRenderTarget(renderer, NULL);
         SDL_RenderCopy(renderer, master_texture, NULL, NULL);
@@ -1184,9 +1301,12 @@ int main(int argc, char *argv[]) {
             break;
         }
         time = mpd_status_get_elapsed_time(status);
-        total_time = mpd_status_get_total_time(status);
+        if (res == 1 || res == 3){
+            total_time = mpd_status_get_total_time(status);            
+        }
         state = mpd_status_get_state(status);
         mpd_status_free(status);
+        mpd_status_free(status2);
 
         SDL_Delay(16);  // Control the frame rate
     }
