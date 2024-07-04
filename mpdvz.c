@@ -525,18 +525,24 @@ void monoster(SDL_Renderer *renderer, SDL_Texture *mons_texture, SDL_Texture *mo
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
     SDL_RenderClear(renderer);
 
-    // Draw the posbar background
-    SDL_Rect stereo, mono;
-    if (channels == 2) {
+    // Define source rectangles for mono and stereo
+    SDL_Rect mono = { 29, 12, 29, 12 };  // Default value
+    SDL_Rect stereo = { 0, 12, 29, 12 };  // Default value
+
+    if (res == 1 || res == 3) {
+        if (channels == 2) {
+            stereo = { 0, 0, 29, 12 };
+            mono = { 29, 12, 29, 12 };
+        } else if (channels == 1) {
+            mono = { 29, 0, 29, 12 };
+            stereo = { 0, 12, 29, 12 };
+        }
+    } else if (res == 0) {
+        stereo = { 0, 12, 29, 12 };
         mono = { 29, 12, 29, 12 };
-        stereo = { 0, 0, 29, 12 };        
-    } else if (channels == 1) {
-        mono = { 29, 0, 29, 12 };
-        stereo = { 0, 12, 29, 12 }; 
-    } else {
-        mono = { 29, 12, 29, 12 };
-        stereo = { 0, 12, 29, 12 }; 
     }
+
+    // Destination rectangles
     SDL_Rect dst_stereo = { 27, 0, 29, 12 };
     SDL_Rect dst_mono = { 0, 0, 29, 12 };
     SDL_RenderCopy(renderer, monoster_texture, &mono, &dst_mono);
@@ -1123,10 +1129,10 @@ int main(int argc, char *argv[]) {
             //const char *track = mpd_song_get_tag(current_song, MPD_TAG_TRACK, 0);
             
             // Fetching bitrate from status
-            bitrate = mpd_status_get_kbit_rate(status);
+            bitrate = mpd_status_get_kbit_rate(status2);
 
             // Fetching sample rate from audio format
-            const struct mpd_audio_format *audio_format = mpd_status_get_audio_format(status);
+            const struct mpd_audio_format *audio_format = mpd_status_get_audio_format(status2);
             sample_rate = (audio_format != NULL) ? audio_format->sample_rate : 0;
             channels = (audio_format != NULL) ? audio_format->channels : 0;
 
@@ -1300,15 +1306,15 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Error retrieving MPD status: %s\n", mpd_connection_get_error_message(conn));
             break;
         }
-        time = mpd_status_get_elapsed_time(status);
+        time = mpd_status_get_elapsed_time(status2);
         if (res == 1 || res == 3){
-            total_time = mpd_status_get_total_time(status);            
+            total_time = mpd_status_get_total_time(status2);            
         }
         state = mpd_status_get_state(status);
         mpd_status_free(status);
         mpd_status_free(status2);
 
-        SDL_Delay(16);  // Control the frame rate
+        SDL_Delay(16);
     }
 
     fftw_destroy_plan(p);
