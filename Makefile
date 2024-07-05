@@ -1,4 +1,4 @@
-CFLAGS += -std=c11 -Wall -O0 -g3
+CFLAGS += -Wall -O0 -g3
 TBCFLAGS = -c -Wall -O2
 LIBS += -lSDL2 -lSDL2_image -lfftw3 -lm -lmpdclient
 

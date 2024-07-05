@@ -24,7 +24,7 @@ const int BSZ = 1152;
 int VisMode = 0;
 int res = 0;
 int ampstatus, bitrate, sample_rate, volume;
-bool repeat, shuffle;
+bool repeat, shuffle, time_remaining;
 int blinking;
 
 const int mult = 2;
@@ -302,7 +302,7 @@ void render_vis(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer, dou
                 for (int dy = -safalloff[x] + 16; dy <= 17; ++dy) {
                     int color_index = dy + 2; // Assuming dy starts from 0
                     Color scope_color = colors[color_index];
-                    drawRect(renderer, x, dy, 1, scope_color); // Assuming drawRect function draws a single pixel
+                    drawRect(renderer, x, dy, 1, scope_color);
                 }            
             }
 
@@ -311,7 +311,7 @@ void render_vis(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer, dou
             } else {
                 if (intValue2 < 15) {
                     Color peaksColor = colors[23];
-                    drawRect(renderer, x, intValue2, 1, peaksColor); // Assuming drawRect function draws a single pixel
+                    drawRect(renderer, x, intValue2, 1, peaksColor);
                 }
             }
         }
@@ -324,46 +324,54 @@ void render_vis(SDL_Renderer *renderer, SDL_Texture *texture, short *buffer, dou
 #define CHAR_HEIGHT 13
 
 void draw_numtext(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *texture, const char *text, int x, int y) {
-    SDL_SetRenderTarget(renderer, texture);
+   SDL_SetRenderTarget(renderer, texture);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
     SDL_RenderClear(renderer);
-    const char *numbers;
-    if (res == 3){
+    const char *numbers = nullptr;
+    SDL_Rect dst_rect;
+    if (res == 3) {
         if (blinking == 0) {
             numbers = "      ";
-        } else if (blinking >= 50) {
+        } else if (blinking >= 60) {
             numbers = text;
         }
     } else if (res == 1) {
         numbers = text;
     }
-    //std::cout << blinking << std::endl;
 
-    if (res == 1 || res == 3){
+    if (numbers != nullptr && (res == 1 || res == 3)) {
         for (const char *c = numbers; *c != '\0'; ++c) {
             int char_index = -1;
+            SDL_Rect src_rect;
             if (*c >= '0' && *c <= '9') {
                 char_index = *c - '0';
+                src_rect = { char_index * CHAR_WIDTH, 0, CHAR_WIDTH, CHAR_HEIGHT };
             } else if (*c == '-') {
-                char_index = 10;
+                src_rect = { 27, 6, 9, 1 };  // Specific coordinates for dash
+                char_index = 10; // Use a specific index for internal logic if needed
             } else if (*c == ':') {
                 char_index = 11;
+                src_rect = { char_index * CHAR_WIDTH, 0, CHAR_WIDTH, CHAR_HEIGHT };
             } else if (*c == ' ') {
-                char_index = 11;
+                char_index = 12;  // Assuming 12th position is for space
+                src_rect = { char_index * CHAR_WIDTH, 0, CHAR_WIDTH, CHAR_HEIGHT };
             }
 
             if (char_index != -1) {
-                SDL_Rect src_rect = { char_index * CHAR_WIDTH, 0, CHAR_WIDTH, CHAR_HEIGHT };
-                SDL_Rect dst_rect = { x, y, CHAR_WIDTH, CHAR_HEIGHT };
+                if (*c == '-'){
+                    dst_rect = { x, 6, 9, 1 };
+                } else {
+                    dst_rect = { x, y, CHAR_WIDTH, CHAR_HEIGHT };
+                }
                 SDL_RenderCopy(renderer, font_texture, &src_rect, &dst_rect);
-                if (*c == ':'){
+                if (*c == ':') {
                     x -= 6;  // Increment x position for next character
                 }
                 x += CHAR_WIDTH + 3;  // Increment x position for next character
             }
         }
     }
-    
+
     SDL_SetRenderTarget(renderer, NULL);
 }
 
@@ -456,10 +464,16 @@ void draw_text(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *t
 
         // Find the character in the charset and get its index
         const wchar_t *char_pos = wcschr(charset, upper_char);
+        int index;
         if (char_pos) {
-            int index = char_pos - charset;
-            int col = charset_indices[index] % (FONT_IMAGE_WIDTH / CHARF_WIDTH);
-            int row = charset_indices[index] / (FONT_IMAGE_WIDTH / CHARF_WIDTH);
+            index = char_pos - charset;
+        } else {
+            // If character is not found, use the index for space (or blank)
+            index = 67;  // Assuming the last index (67) is a space or blank
+        }
+
+        int col = charset_indices[index] % (FONT_IMAGE_WIDTH / CHARF_WIDTH);
+        int row = charset_indices[index] / (FONT_IMAGE_WIDTH / CHARF_WIDTH);
 
             // Debug output
             /* std::wcout << L"Character: " << upper_char 
@@ -468,14 +482,10 @@ void draw_text(SDL_Renderer *renderer, SDL_Texture *font_texture, SDL_Texture *t
                << L", Row: " << row 
                << std::endl; */
 
-            SDL_Rect src_rect = { col * CHARF_WIDTH, row * CHARF_HEIGHT, CHARF_WIDTH, CHARF_HEIGHT };
-            SDL_Rect dst_rect = { x, y, CHARF_WIDTH, CHARF_HEIGHT };
-            SDL_RenderCopy(renderer, font_texture, &src_rect, &dst_rect);
-            x += CHARF_WIDTH;
-        } else {
-            // Handle characters not found in the charset (should not happen if charset is complete)
-            continue;
-        }
+        SDL_Rect src_rect = { col * CHARF_WIDTH, row * CHARF_HEIGHT, CHARF_WIDTH, CHARF_HEIGHT };
+        SDL_Rect dst_rect = { x, y, CHARF_WIDTH, CHARF_HEIGHT };
+        SDL_RenderCopy(renderer, font_texture, &src_rect, &dst_rect);
+        x += CHARF_WIDTH;
     }
 
     SDL_SetRenderTarget(renderer, NULL);
@@ -829,9 +839,16 @@ void render_volume(SDL_Renderer *renderer, SDL_Texture *vol_texture, SDL_Texture
 }
 
 void format_time(unsigned int time, char *buffer, int width) {
-    unsigned int minutes = time / 60;
-    unsigned int seconds = time % 60;
-    sprintf(buffer, "%02u:%02u", minutes, seconds);
+    unsigned int display_time = (total_time == 0 || !time_remaining) ? time : total_time - time;
+
+    unsigned int minutes = display_time / 60;
+    unsigned int seconds = display_time % 60;
+
+    if (time_remaining && total_time != 0) {
+        sprintf(buffer, "-%02u:%02u", minutes, seconds);
+    } else {
+        sprintf(buffer, "%02u:%02u", minutes, seconds);
+    }
 
     // Calculate the starting position for right alignment
     int text_width = strlen(buffer);  // Calculate the width of the rendered text
@@ -883,8 +900,15 @@ int print_status(enum mpd_state state) {
     }
 }
 
-double hann(int n, int N) {
-    return 0.5 * (1 - cos(2 * M_PI * n / (N - 1)));
+// Function to calculate the Blackman-Harris window coefficient
+double blackman_harris(int n, int N) {
+    const double a0 = 0.35875;
+    const double a1 = 0.48829;
+    const double a2 = 0.14128;
+    const double a3 = 0.01168;
+    return a0 - a1 * cos((2.0 * M_PI * n) / (N - 1))
+               + a2 * cos((4.0 * M_PI * n) / (N - 1))
+               - a3 * cos((6.0 * M_PI * n) / (N - 1));
 }
 
 bool HasWindowFocus(SDL_Window* window)
@@ -951,6 +975,17 @@ SDL_HitTestResult HitTestCallback(SDL_Window *Window, const SDL_Point *Area, voi
     }
 
     return SDL_HITTEST_NORMAL; // Return normal if not in draggable area
+}
+
+std::string getFilenameFromURI(const std::string& uri) {
+    // Find the last slash in the URI
+    size_t lastSlashPos = uri.find_last_of('/');
+    if (lastSlashPos != std::string::npos) {
+        // Extract the filename from the URI
+        return uri.substr(lastSlashPos + 1);
+    }
+    // If no slash is found, return the original URI (unlikely case)
+    return uri;
 }
 
 int main(int argc, char *argv[]) {
@@ -1070,6 +1105,7 @@ int main(int argc, char *argv[]) {
     short buf[BSZ];
     double fft_result[BSZ];
     int shutdown = 0;
+    int BSZ2 = 1024;
     enum mpd_state state = mpd_status_get_state(status);
     ssize_t read_count;
     while (!shutdown) {
@@ -1080,14 +1116,16 @@ int main(int argc, char *argv[]) {
             read_count = BSZ; // Simulate full buffer of zeros
         }
 
-        for (int i = 0; i < BSZ; i++) {
-            double window = hann(i, BSZ);
-            in[i][0] = buf[i] * window; // Apply Hann window to real part
-            in[i][1] = 0.0;             // Imaginary part remains 0
+        // Apply Blackman-Harris window to the input data
+        for (int i = 0; i < BSZ2; i++) {
+            double window = blackman_harris(i, BSZ2);
+            in[i][0] = buf[i] * window;
+            in[i][1] = 0.0;
         }
+
         fftw_execute(p);
 
-        for (int i = 0; i < BSZ; i++) {
+        for (int i = 0; i < BSZ2; i++) {
             fft_result[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // Magnitude
         }
 
@@ -1101,10 +1139,16 @@ int main(int argc, char *argv[]) {
                     int mouseY = event.button.y;
 
                     SDL_Rect clickableRect = {24 * mult, 43 * mult, 76 * mult, 16 * mult};
+                    SDL_Rect num_click = {36*mult, 26*mult, 63*mult, 13*mult};
 
                     if (mouseX >= clickableRect.x && mouseX <= clickableRect.x + clickableRect.w &&
                         mouseY >= clickableRect.y && mouseY <= clickableRect.y + clickableRect.h) {
                         VisMode = (VisMode + 1) % 3;  // Increment VisMode and wrap around using modulo
+                    }
+
+                    if (mouseX >= num_click.x && mouseX <= num_click.x + num_click.w &&
+                        mouseY >= num_click.y && mouseY <= num_click.y + num_click.h) {
+                        time_remaining = !time_remaining;
                     }
                 }
             }
@@ -1130,7 +1174,8 @@ int main(int argc, char *argv[]) {
             const char *title = mpd_song_get_tag(current_song, MPD_TAG_TITLE, 0);
             const char *artist = mpd_song_get_tag(current_song, MPD_TAG_ARTIST, 0);
             const char *album = mpd_song_get_tag(current_song, MPD_TAG_ALBUM, 0);
-            //const char *track = mpd_song_get_tag(current_song, MPD_TAG_TRACK, 0);
+            const char *track = mpd_song_get_tag(current_song, MPD_TAG_UNKNOWN, 0);
+            std::string filename = getFilenameFromURI(mpd_song_get_uri(current_song));
             
             // Fetching bitrate from status
             bitrate = mpd_status_get_kbit_rate(status2);
@@ -1145,7 +1190,7 @@ int main(int argc, char *argv[]) {
             } else if (title) {
                 song_title = std::to_string(current_song_id) + ". " + std::string(title) + " (" + std::string(format_time2(total_time, time_str2)) + ")";
             } else {
-                song_title = std::to_string(current_song_id) + ". " + std::string(mpd_song_get_uri(current_song)) + " (" + std::string(format_time2(total_time, time_str2)) + ")";
+                song_title = std::to_string(current_song_id) + ". " + std::string(filename) + " (" + std::string(format_time2(total_time, time_str2)) + ")";
             }
 
             if (bitrate > 0) {
@@ -1224,7 +1269,7 @@ int main(int argc, char *argv[]) {
         }
 
         blinking++;
-        if (blinking == 100) {
+        if (blinking == 120) {
             blinking = 0;
         }
 
