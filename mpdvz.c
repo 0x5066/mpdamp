@@ -13,6 +13,7 @@
 #include <string>    // For std::string
 #include <sstream>   // For std::wstringstream
 #include <codecvt>   // For std::codecvt_utf8_utf16
+#include <time.h>
 
 #define M_PI 3.14159265358979323846
 
@@ -34,6 +35,13 @@ float total_time = 0;
 bool isDragging = false;
 int mouseX, mouseY;
 unsigned int current_song_id = 0;
+
+time_t theTime = time(NULL);
+struct tm *aTime = localtime(&theTime);
+
+int day = aTime->tm_mday;
+int month = aTime->tm_mon + 1; // Month is 0 - 11, add 1 to get a jan-dec 1-12 concept
+int year = aTime->tm_year + 1900; // Year is # years since 1900
 
 SDL_Texture *masterTexture = NULL;
 
@@ -120,22 +128,29 @@ void clearRenderer(SDL_Renderer* renderer) {
             }
         }
     }
+    if (month == 6){
+        SDL_Rect rect1 = {0, 0, 75, 3};
+        SDL_SetRenderDrawColor(renderer, 91, 206, 250, day * 2);
+        SDL_RenderFillRect(renderer, &rect1);
+        SDL_Rect rect2 = {0, 3, 75, 4};
+        SDL_SetRenderDrawColor(renderer, 245, 169, 184, day * 2);
+        SDL_RenderFillRect(renderer, &rect2);
+        SDL_Rect rect3 = {0, 7, 75, 3};
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, day * 2);
+        SDL_RenderFillRect(renderer, &rect3);
+        SDL_Rect rect4 = {0, 10, 75, 4};
+        SDL_SetRenderDrawColor(renderer, 245, 169, 184, day * 2);
+        SDL_RenderFillRect(renderer, &rect4);
+        SDL_Rect rect5 = {0, 14, 75, 3};
+        SDL_SetRenderDrawColor(renderer, 91, 206, 250, day * 2);
+        SDL_RenderFillRect(renderer, &rect5);
+    }
 }
 
 void clearTexture(SDL_Renderer *renderer, SDL_Texture *texture) {
     SDL_SetRenderTarget(renderer, texture);
     clearRenderer(renderer);
     SDL_SetRenderTarget(renderer, NULL);
-}
-
-void render_to_master(SDL_Renderer *renderer, SDL_Texture *texture, SDL_Rect *target_rect) {
-    SDL_SetRenderTarget(renderer, texture);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderClear(renderer);
-    // Render to texture here (e.g., render_waveform and render_spec functions)
-    SDL_SetRenderTarget(renderer, NULL); // Reset render target
-    SDL_RenderCopy(renderer, texture, NULL, target_rect); // Render master texture to window
-    SDL_RenderPresent(renderer);
 }
 
 // C-weighting filter coefficients calculation
@@ -1054,7 +1069,18 @@ int main(int argc, char *argv[]) {
     SDL_Texture *shufrep_texture = SDL_CreateTextureFromSurface(renderer, shufrep_surface);
     SDL_FreeSurface(shufrep_surface);
 
+    const char *mmonth;
+    if (month == 6){
+        mmonth = "TRANSamp.png";
+    } else {
+        mmonth = "MPDamp.png";
+    }
+    SDL_Surface *icon_surface = IMG_Load(mmonth);
+    //SDL_FreeSurface(icon_surface);
+
     SDL_SetWindowHitTest(window, HitTestCallback, 0);
+
+    SDL_SetWindowIcon(window, icon_surface);
 
     // you dont wanna see video memory in that box, do ya?
     clearTexture(renderer, vis_texture);
@@ -1198,6 +1224,9 @@ int main(int argc, char *argv[]) {
                     bitrate_info = "  " + std::to_string(bitrate);      
                 } else if (bitrate < 100){
                     bitrate_info = " " + std::to_string(bitrate);      
+                } else if (bitrate > 1000){
+                    std::string bitrate_str = std::to_string(bitrate);
+                    bitrate_info = bitrate_str.substr(0, 2) + "H";
                 } else {
                     bitrate_info = std::to_string(bitrate);                    
                 }
@@ -1210,8 +1239,13 @@ int main(int argc, char *argv[]) {
             if (sample_rate > 0) {
                 if (sample_rate < 10){
                     sample_rate_info = " " + std::to_string(sample_rate / 1000.0);
+                } else if (sample_rate / 1000 > 100) {
+                    std::string sample_rate_str = std::to_string(sample_rate / 1000.0);
+                    sample_rate_info = sample_rate_str.substr(1, 3);
+                } else {
+                    sample_rate_info = std::to_string(sample_rate / 1000.0);
                 }
-                sample_rate_info = std::to_string(sample_rate / 1000.0);
+
             } else {
                 if (res == 1 || res == 3){
                     sample_rate_info = " 0";
@@ -1225,6 +1259,9 @@ int main(int argc, char *argv[]) {
 
         //printf(bitrate_info.c_str());
         current_song_id = getCurrentSongID(conn);
+
+        /* std::cout << sample_rate / 1000
+        << bitrate << std::endl; */
 
         std::wstringstream wide_stream;
         wide_stream << std::wstring(song_title.begin(), song_title.end()); // Convert std::string
