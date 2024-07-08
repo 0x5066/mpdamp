@@ -1,19 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h> // for read, close
-#include <signal.h>
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
-#include <mpd/client.h>
-#include <fftw3.h>
-#include <math.h>
-#include <iostream>
-#include <string>    // For std::string
-#include <sstream>   // For std::wstringstream
-#include <codecvt>   // For std::codecvt_utf8_utf16
-#include <time.h>
+#include "mpdamp.h"
 
 #define M_PI 3.14159265358979323846
 
@@ -27,6 +12,7 @@ int res = 0;
 int ampstatus, bitrate, sample_rate, volume;
 bool repeat, shuffle, time_remaining;
 int blinking;
+bool hasfocus;
 
 const int mult = 2;
 
@@ -35,6 +21,10 @@ float total_time = 0;
 bool isDragging = false;
 int mouseX, mouseY;
 unsigned int current_song_id = 0;
+
+unsigned long total_queue_time = 0;
+
+const int DOCK_RADIUS = 40 * 2;
 
 time_t theTime = time(NULL);
 struct tm *aTime = localtime(&theTime);
@@ -58,6 +48,7 @@ typedef struct {
 
 int last_y = 0;
 int top = 0, bottom = 0;
+
 
 Color colors[] = {
     {0, 0, 0, 255},        // color 0 = black
@@ -625,6 +616,7 @@ void handleMouseEvent(SDL_Event &e, int &seek_x, float &elapsed_time, float tota
 }
 
 void updateSeekPosition(int &seek_x, float elapsed_time, float total_time) {
+    elapsed_time = elapsed_time / 1000;
     if (!isDragging) {
         float progress = (total_time > 0) ? static_cast<float>(elapsed_time) / total_time : 0;
         seek_x = static_cast<int>(progress * (POSBAR_WIDTH - SEEK_BUTTON_WIDTH));
@@ -853,7 +845,8 @@ void render_volume(SDL_Renderer *renderer, SDL_Texture *vol_texture, SDL_Texture
     SDL_SetRenderTarget(renderer, NULL);
 }
 
-void format_time(unsigned int time, char *buffer, int width) {
+void format_time(float time, char *buffer, int width) {
+    time = time / 1000;
     unsigned int display_time = (total_time == 0 || !time_remaining) ? time : total_time - time;
 
     unsigned int minutes = display_time / 60;
@@ -935,7 +928,21 @@ bool HasWindowFocus(SDL_Window* window)
     return (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
 
-#define MOUSE_GRAB_PADDING 10
+SDL_HitTestResult WindowDrag(SDL_Window *Window, const SDL_Point *Area, void *Data)
+{
+    int Width, Height;
+    SDL_GetWindowSize(Window, &Width, &Height);
+
+    // Draggable area
+    int draggableWidth = Width * mult;
+    int draggableHeight = 14 * mult;
+
+    if (Area->y < draggableHeight) {
+        return SDL_HITTEST_DRAGGABLE;
+    }
+
+    return SDL_HITTEST_NORMAL; // Return normal if not in draggable area
+}
 
 SDL_HitTestResult HitTestCallback(SDL_Window *Window, const SDL_Point *Area, void *Data)
 {
@@ -946,50 +953,31 @@ SDL_HitTestResult HitTestCallback(SDL_Window *Window, const SDL_Point *Area, voi
     int draggableWidth = Width * mult;
     int draggableHeight = 14 * mult;
 
-    if(Area->y < MOUSE_GRAB_PADDING)
-    {
-        if(Area->x < MOUSE_GRAB_PADDING)
-        {
-            return SDL_HITTEST_RESIZE_TOPLEFT;
-        }
-        else if(Area->x > Width - MOUSE_GRAB_PADDING)
-        {
-            return SDL_HITTEST_RESIZE_TOPRIGHT;
-        }
-        else
-        {
-            return SDL_HITTEST_RESIZE_TOP;
-        }
-    }
-    else if(Area->y > Height - MOUSE_GRAB_PADDING)
-    {
-        if(Area->x < MOUSE_GRAB_PADDING)
-        {
-            return SDL_HITTEST_RESIZE_BOTTOMLEFT;
-        }
-        else if(Area->x > Width - MOUSE_GRAB_PADDING)
-        {
-            return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
-        }
-        else
-        {
-            return SDL_HITTEST_RESIZE_BOTTOM;
-        }
-    }
-    else if(Area->x < MOUSE_GRAB_PADDING)
-    {
-        return SDL_HITTEST_RESIZE_LEFT;
-    }
-    else if(Area->x > Width - MOUSE_GRAB_PADDING)
-    {
-        return SDL_HITTEST_RESIZE_RIGHT;
-    }
-    else if(Area->y < draggableHeight && Area->x < draggableWidth)
-    {
+    // Specify the rectangle where resizing is allowed
+    int resizeRectX = PL_ResizeX; // X-coordinate of the top-left corner of the resizable rectangle
+    int resizeRectY = PL_ResizeY; // Y-coordinate of the top-left corner of the resizable rectangle
+    int resizeRectW = 19;         // Width of the resizable rectangle
+    int resizeRectH = 19;         // Height of the resizable rectangle
+    int MOUSE_GRAB_PADDING = 19;
+
+    // Check if the mouse is within the draggable area
+    if (Area->y < draggableHeight) {
         return SDL_HITTEST_DRAGGABLE;
     }
 
-    return SDL_HITTEST_NORMAL; // Return normal if not in draggable area
+    // Check if the mouse is within the resizable rectangle
+    if (Area->x >= resizeRectX && Area->x < resizeRectX + resizeRectW &&
+        Area->y >= resizeRectY && Area->y < resizeRectY + resizeRectH)
+    {
+        // Determine if the mouse is in the bottom-right corner
+        if (Area->x >= resizeRectX + resizeRectW - MOUSE_GRAB_PADDING &&
+            Area->y >= resizeRectY + resizeRectH - MOUSE_GRAB_PADDING)
+        {
+            return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+        }
+    }
+
+    return SDL_HITTEST_NORMAL; // Return normal if not in the resizable area
 }
 
 std::string getFilenameFromURI(const std::string& uri) {
@@ -1003,6 +991,90 @@ std::string getFilenameFromURI(const std::string& uri) {
     return uri;
 }
 
+void DockWindows(SDL_Window *window, SDL_Window *window2, int offsetX, int offsetY) {
+    int winX, winY, winW, winH;
+    SDL_GetWindowPosition(window, &winX, &winY);
+    SDL_GetWindowSize(window, &winW, &winH);
+
+    int win2X, win2Y, win2W, win2H;
+    SDL_GetWindowPosition(window2, &win2X, &win2Y);
+    SDL_GetWindowSize(window2, &win2W, &win2H);
+
+    // Calculate the new position of window2 based on window's position and the offsets
+    int newWin2X = winX + offsetX;
+    int newWin2Y = winY + offsetY;
+
+    // Check if window2 is docked or within 10 pixels of window
+    bool isDocked = (abs(win2X - newWin2X) <= DOCK_RADIUS && abs(win2Y - newWin2Y) <= DOCK_RADIUS);
+
+    // Update the position of window2 if it is docked or near the main window
+    if (isDocked) {
+        SDL_SetWindowPosition(window2, newWin2X, newWin2Y);
+    }
+}
+
+const char* qlength(struct mpd_connection *conn, char *duration_str) {
+    const struct mpd_song *song;
+    struct mpd_entity *entity;
+    float total_duration = 0.0f;
+
+    // Send playlist command and get the list of songs
+    if (!mpd_send_list_queue_meta(conn)) {
+        std::cerr << "Failed to send list queue command: " << mpd_connection_get_error_message(conn) << std::endl;
+        mpd_connection_free(conn);
+        return NULL;
+    }
+
+    // Read the songs from the queue
+    while ((entity = mpd_recv_entity(conn)) != NULL) {
+        if (mpd_entity_get_type(entity) == MPD_ENTITY_TYPE_SONG) {
+            song = mpd_entity_get_song(entity);
+            total_duration += mpd_song_get_duration_ms(song) / 1000.0f;
+        }
+        mpd_entity_free(entity);
+    }
+
+    // Check for errors
+    if (mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
+        std::cerr << "Error while reading the queue: " << mpd_connection_get_error_message(conn) << std::endl;
+        mpd_connection_free(conn);
+        return NULL;
+    }
+
+    // Finish the command
+    if (!mpd_response_finish(conn)) {
+        std::cerr << "Failed to finish response: " << mpd_connection_get_error_message(conn) << std::endl;
+        mpd_connection_free(conn);
+        return NULL;
+    }
+
+    // Convert total duration to HH:MM:SS or MM:SS format
+    int hours = static_cast<int>(total_duration) / 3600;
+    int minutes = (static_cast<int>(total_duration) % 3600) / 60;
+    int seconds = static_cast<int>(total_duration) % 60;
+
+    if (hours > 0) {
+        sprintf(duration_str, "%02d:%02d:%02d", hours, minutes, seconds);
+    } else if (minutes < 10) {
+        sprintf(duration_str, "%d:%02d", minutes, seconds);
+    } else {
+        sprintf(duration_str, "%02d:%02d", minutes, seconds);
+    }
+
+    // Return the formatted string
+    return duration_str;
+}
+
+void set_skip_taskbar_hint(Display* display, Window window) {
+    Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
+    Atom skipTaskbar = XInternAtom(display, "_NET_WM_STATE_SKIP_TASKBAR", False);
+
+    XChangeProperty(display, window, wmState, XA_ATOM, 32, PropModeReplace,
+                    reinterpret_cast<unsigned char*>(&skipTaskbar), 1);
+
+    XFlush(display);
+}
+
 int main(int argc, char *argv[]) {
 
     SDL_Window *window = SDL_CreateWindow("MPDamp",
@@ -1010,6 +1082,35 @@ int main(int argc, char *argv[]) {
                                           WIDTH*mult, HEIGHT*mult, SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS);
 
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+
+    SDL_Window *window2 = SDL_CreateWindow("MPDamp Playlist",
+                                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED+HEIGHT,
+                                          WIDTH, HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_BORDERLESS);
+
+    SDL_Renderer *renderer2 = SDL_CreateRenderer(window2, -1, SDL_RENDERER_ACCELERATED);
+
+    // Get the native window handles
+    SDL_SysWMinfo info1, info2;
+    SDL_VERSION(&info1.version);
+    SDL_VERSION(&info2.version);
+
+    Display* display = nullptr;
+    Window mainWindow = 0;
+    Window childWindow = 0;
+
+    if (SDL_GetWindowWMInfo(window, &info1) && SDL_GetWindowWMInfo(window2, &info2)) {
+        display = info1.info.x11.display;
+        mainWindow = info1.info.x11.window;
+        childWindow = info2.info.x11.window;
+
+        // Set the child window's parent
+        XSetTransientForHint(display, childWindow, mainWindow);
+
+        // Set the _NET_WM_STATE_SKIP_TASKBAR hint
+        set_skip_taskbar_hint(display, childWindow);
+    } else {
+        std::cerr << "Failed to get window information: " << SDL_GetError() << std::endl;
+    }
 
     SDL_Texture *master_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, WIDTH*mult, HEIGHT*mult);
     SDL_Texture *vis_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 75, 16);
@@ -1069,6 +1170,12 @@ int main(int argc, char *argv[]) {
     SDL_Texture *shufrep_texture = SDL_CreateTextureFromSurface(renderer, shufrep_surface);
     SDL_FreeSurface(shufrep_surface);
 
+    SDL_Surface *pledit_surface = IMG_Load("pledit.bmp");
+    SDL_Texture *pledit_texture = SDL_CreateTextureFromSurface(renderer2, pledit_surface);
+    SDL_FreeSurface(pledit_surface);
+
+    load_textbmp(renderer2);
+
     const char *mmonth;
     if (month == 6){
         mmonth = "TRANSamp.png";
@@ -1078,7 +1185,8 @@ int main(int argc, char *argv[]) {
     SDL_Surface *icon_surface = IMG_Load(mmonth);
     //SDL_FreeSurface(icon_surface);
 
-    SDL_SetWindowHitTest(window, HitTestCallback, 0);
+    SDL_SetWindowHitTest(window, WindowDrag, 0);
+    SDL_SetWindowHitTest(window2, HitTestCallback, 0);
 
     SDL_SetWindowIcon(window, icon_surface);
 
@@ -1087,12 +1195,11 @@ int main(int argc, char *argv[]) {
     SDL_Rect dst_rect_vis = {24*mult, 43*mult, 75*mult, 16*mult};
     SDL_RenderCopy(renderer, vis_texture, NULL, &dst_rect_vis);
 
+    SDL_SetWindowMinimumSize(window2, WIDTH, HEIGHT);
+
     float time = 0;
     int seek_x = 0;
     int channels;
-    char time_str[6]; // buffer to hold the formatted string "MM:SS"
-    char time_str2[6]; // buffer to hold the formatted string "MM:SS"
-    bool hasfocus;
     struct mpd_connection *conn = mpd_connection_new(NULL, 0, 0);
     if (mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
         fprintf(stderr, "Error connecting to MPD: %s\n", mpd_connection_get_error_message(conn));
@@ -1122,11 +1229,16 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, handle_sigint);
 
+    char duration_str[9];
+
     fftw_complex *in = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * BSZ);
     fftw_complex *out = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * BSZ);
     fftw_plan p = fftw_plan_dft_1d(BSZ, in, out, FFTW_FORWARD, FFTW_ESTIMATE);
 
     SDL_Rect src_rect = {0, 0, 0, 0}; // Source rect for image
+
+    int offsetX = 0;
+    int offsetY = HEIGHT * mult;
 
     short buf[BSZ];
     double fft_result[BSZ];
@@ -1143,44 +1255,53 @@ int main(int argc, char *argv[]) {
         }
 
         // Apply Blackman-Harris window to the input data
-        for (int i = 0; i < BSZ2; i++) {
-            double window = blackman_harris(i, BSZ2);
-            in[i][0] = buf[i] * window;
-            in[i][1] = 0.0;
-        }
+        if (read_count > 0) {
+            for (int i = 0; i < BSZ; i++) {
+                double window = blackman_harris(i, BSZ);
+                in[i][0] = buf[i] * window; // Apply Hann window to real part
+                in[i][1] = 0.0;             // Imaginary part remains 0
+            }
+            fftw_execute(p);
 
-        fftw_execute(p);
-
-        for (int i = 0; i < BSZ2; i++) {
-            fft_result[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // Magnitude
+            for (int i = 0; i < BSZ; i++) {
+                fft_result[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // Magnitude
+            }
         }
 
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                shutdown = 1;
-            } else if (event.type == SDL_MOUSEBUTTONDOWN) {
-                if (event.button.button == SDL_BUTTON_LEFT) {  // Check for left mouse button
-                    int mouseX = event.button.x;
-                    int mouseY = event.button.y;
+            if (event.window.windowID == SDL_GetWindowID(window)) {
+                if (event.type == SDL_QUIT) {
+                    shutdown = 1;
+                } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+                    if (event.button.button == SDL_BUTTON_LEFT) {  // Check for left mouse button
+                        int mouseX = event.button.x;
+                        int mouseY = event.button.y;
 
-                    SDL_Rect clickableRect = {24 * mult, 43 * mult, 76 * mult, 16 * mult};
-                    SDL_Rect num_click = {36*mult, 26*mult, 63*mult, 13*mult};
+                        SDL_Rect clickableRect = {24 * mult, 43 * mult, 76 * mult, 16 * mult};
+                        SDL_Rect num_click = {36*mult, 26*mult, 63*mult, 13*mult};
 
-                    if (mouseX >= clickableRect.x && mouseX <= clickableRect.x + clickableRect.w &&
-                        mouseY >= clickableRect.y && mouseY <= clickableRect.y + clickableRect.h) {
-                        VisMode = (VisMode + 1) % 3;  // Increment VisMode and wrap around using modulo
-                    }
+                        if (mouseX >= clickableRect.x && mouseX <= clickableRect.x + clickableRect.w &&
+                            mouseY >= clickableRect.y && mouseY <= clickableRect.y + clickableRect.h) {
+                            VisMode = (VisMode + 1) % 3;  // Increment VisMode and wrap around using modulo
+                        }
 
-                    if (mouseX >= num_click.x && mouseX <= num_click.x + num_click.w &&
-                        mouseY >= num_click.y && mouseY <= num_click.y + num_click.h) {
-                        time_remaining = !time_remaining;
+                        if (mouseX >= num_click.x && mouseX <= num_click.x + num_click.w &&
+                            mouseY >= num_click.y && mouseY <= num_click.y + num_click.h) {
+                            time_remaining = !time_remaining;
+                        }
                     }
                 }
             }
             handleMouseEvent(event, seek_x, time, total_time, conn);
             cbuttons(event, renderer, cbutt_texture, cbuttons_texture, conn);
             shufrep(event, renderer, shuf_texture, shufrep_texture, conn);
+        }
+
+        // Reapply the skip taskbar hint and dock the windows continuously
+        if (display && childWindow) {
+            set_skip_taskbar_hint(display, childWindow);
+            DockWindows(window, window2, offsetX, offsetY); // Example offset, change as needed
         }
 
         struct mpd_status *status2 = mpd_run_status(conn);
@@ -1263,6 +1384,10 @@ int main(int argc, char *argv[]) {
         /* std::cout << sample_rate / 1000
         << bitrate << std::endl; */
 
+        total_duration_str = qlength(conn, duration_str);
+
+        //std::cout << total_duration_str << std::endl;
+
         std::wstringstream wide_stream;
         wide_stream << std::wstring(song_title.begin(), song_title.end()); // Convert std::string
         std::wstringstream wide_bit;
@@ -1329,13 +1454,6 @@ int main(int argc, char *argv[]) {
         SDL_SetRenderTarget(renderer, master_texture);
         SDL_RenderClear(renderer);
 
-        int posplay;
-        if (ampstatus == 1){
-            posplay = 26;
-        } else {
-            posplay = 28;
-        }
-
         SDL_Rect dst_rect_image = {0, 0, WIDTH*mult, 116*mult}; // position and size for the image
         SDL_Rect dst_rect_image2 = {36*mult, 26*mult, 63*mult, 13*mult}; // position and size for the image
         SDL_Rect dst_rect_play = {26*mult, 28*mult, 9*mult, 9*mult}; // position and size for the image
@@ -1387,16 +1505,25 @@ int main(int argc, char *argv[]) {
         SDL_RenderCopy(renderer, master_texture, NULL, NULL);
         SDL_RenderPresent(renderer);
 
+        draw_playlisteditor(window2, renderer2);
+
         status = mpd_run_status(conn);
         if (!status) {
             fprintf(stderr, "Error retrieving MPD status: %s\n", mpd_connection_get_error_message(conn));
             break;
         }
-        time = mpd_status_get_elapsed_time(status2);
+        time = mpd_status_get_elapsed_ms(status2);
         if (res == 1 || res == 3){
             total_time = mpd_status_get_total_time(status2);            
         }
         state = mpd_status_get_state(status);
+
+
+/*         struct mpd_stats *stats = mpd_run_stats(conn);
+        total_queue_time = mpd_stats_get_db_play_time(stats);
+        printf("DB Play Time: %s\n", DHMS(total_queue_time));
+        std::cout << total_queue_time << std::endl;
+        mpd_stats_free(stats); */
         mpd_status_free(status);
         mpd_status_free(status2);
 
