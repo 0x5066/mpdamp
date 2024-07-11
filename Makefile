@@ -1,6 +1,6 @@
 CFLAGS += -Wall -O0 -g3
 TBCFLAGS = -c
-LIBS += -lSDL2 -lSDL2_image -lfftw3 -lm -lmpdclient -lX11
+LIBS += -lSDL2 -lSDL2_image -lSDL2_ttf -lfftw3 -lm -lmpdclient -lX11
 
 OBJS = mpdamppl.o
 

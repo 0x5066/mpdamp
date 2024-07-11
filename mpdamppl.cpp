@@ -86,6 +86,7 @@ const int charset_indices[] = {
 
 SDL_Texture *pltime_texture = NULL;
 SDL_Texture *pltotaltime_texture = NULL;
+SDL_Texture *pltext_texture = NULL;
 SDL_Surface *text_surface = NULL;
 SDL_Texture *text_texture = NULL;
 SDL_Surface *pledit_surface = NULL;
@@ -101,6 +102,9 @@ void load_textbmp(SDL_Renderer *renderer){
 
     pltotaltime_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 90, 6);
     SDL_SetTextureBlendMode(pltotaltime_texture, SDL_BLENDMODE_BLEND);
+
+    pltext_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 1920, 1080);
+    SDL_SetTextureBlendMode(pltext_texture, SDL_BLENDMODE_BLEND);
 
     text_surface = IMG_Load("text.bmp");
     text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
@@ -263,10 +267,8 @@ void draw_playlisteditor(SDL_Window *Window, SDL_Renderer *renderer) {
     SDL_Rect dst_rect_pledit_title = {title_x, 0, 100, 20};
     
     SDL_Rect dst_rect_pledit_topright = {-25 + Width, 0, 25, 20};
-    SDL_Rect dst_rect_pledit_leftstretchybit = {0, 20, 25, 29};
     SDL_Rect dst_rect_pledit_bottomleft = {0, bottom_y, 125, 38};
     SDL_Rect dst_rect_pledit_bottomright = {Width - 150, bottom_y, 150, 38};
-    SDL_Rect dst_rect_pledit_rightstretchybit = {Width - 25, 20, 25, 29};
 
     SDL_Rect dst_rect_pledit_time = {Width - 86, Height - 15, 32, 6};
     SDL_Rect dst_rect_pledit_ttime = {Width - 143, Height - 28, 90, 6};
@@ -315,6 +317,8 @@ void draw_playlisteditor(SDL_Window *Window, SDL_Renderer *renderer) {
         SDL_RenderCopy(renderer, pledit, &src_rect_pledit_bottomstretchybit, &dst_rect_pledit_bottomstretchybit);
     }
 
+    render_text(renderer, pltext_texture, font, song_title.c_str(), 0, 0, {255,255,255});
+
     SDL_RenderCopy(renderer, pledit, &src_rect_pledit_topleft, &dst_rect_pledit_topleft);
     SDL_RenderCopy(renderer, pledit, &src_rect_pledit_title, &dst_rect_pledit_title);
     SDL_RenderCopy(renderer, pledit, &src_rect_pledit_topright, &dst_rect_pledit_topright);
@@ -324,5 +328,74 @@ void draw_playlisteditor(SDL_Window *Window, SDL_Renderer *renderer) {
     SDL_RenderCopy(renderer, pltime_texture, &src_rect_pledit_time, &dst_rect_pledit_time);
     SDL_RenderCopy(renderer, pltotaltime_texture, &src_rect_pledit_ttime, &dst_rect_pledit_ttime);
 
+    SDL_Rect src_rect_pledit_list = {0, 0, Width - 20 - 12, Height - 39 - 21}; 
+    SDL_Rect dst_rect_pledit_list = {12, 21, Width - 20 - 12, Height - 39 - 21}; 
+    SDL_RenderCopy(renderer, pltext_texture, &src_rect_pledit_list, &dst_rect_pledit_list);
+
     SDL_RenderPresent(renderer);
+}
+
+// Function to print the list of songs and their durations
+void retrieve_songs(struct mpd_connection *conn, std::vector<std::string> &songs) {
+    const struct mpd_song *song;
+    struct mpd_entity *entity;
+    int index = 1; // Index of the songs in the queue
+
+    // Send playlist command and get the list of songs
+    if (!mpd_send_list_queue_meta(conn)) {
+        std::cerr << "Failed to send list queue command: " << mpd_connection_get_error_message(conn) << std::endl;
+        mpd_connection_free(conn);
+        return;
+    }
+
+    // Read the songs from the queue
+    while ((entity = mpd_recv_entity(conn)) != NULL) {
+        if (mpd_entity_get_type(entity) == MPD_ENTITY_TYPE_SONG) {
+            song = mpd_entity_get_song(entity);
+            const char *title = mpd_song_get_tag(song, MPD_TAG_TITLE, 0);
+            const char *artist = mpd_song_get_tag(song, MPD_TAG_ARTIST, 0);
+            int duration = mpd_song_get_duration_ms(song) / 1000;
+            int minutes = duration / 60;
+            int seconds = duration % 60;
+
+            // Construct the song details string
+            char buffer[256];
+            sprintf(buffer, "%d. %s - %s [%d:%02d]", index++, (artist ? artist : "Unknown Artist"), (title ? title : "Unnamed Song"), minutes, seconds);
+            songs.push_back(buffer);
+        }
+        mpd_entity_free(entity);
+    }
+
+    // Check for errors
+    if (mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
+        std::cerr << "Error while reading the queue: " << mpd_connection_get_error_message(conn) << std::endl;
+    }
+
+    // Finish the command
+    if (!mpd_response_finish(conn)) {
+        std::cerr << "Failed to finish response: " << mpd_connection_get_error_message(conn) << std::endl;
+    }
+}
+
+// Function to render text using SDL_ttf
+void render_text(SDL_Renderer *renderer, SDL_Texture *texture, TTF_Font *font, const char *text, int x, int y, SDL_Color color) {
+    SDL_Surface *surface = TTF_RenderText_Solid(font, text, color);
+
+    SDL_Texture *text_texture = SDL_CreateTextureFromSurface(renderer, surface);
+
+    SDL_SetRenderTarget(renderer, texture);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Clear with transparent color (R, G, B, A)
+    SDL_RenderClear(renderer);
+
+    SDL_Rect dest_rect;
+    dest_rect.x = x;
+    dest_rect.y = y;
+    dest_rect.w = surface->w;
+    dest_rect.h = surface->h;
+
+    SDL_RenderCopy(renderer, text_texture, NULL, &dest_rect);
+
+    SDL_FreeSurface(surface);
+    SDL_DestroyTexture(text_texture);
+    SDL_SetRenderTarget(renderer, NULL);
 }

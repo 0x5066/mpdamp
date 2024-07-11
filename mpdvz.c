@@ -38,6 +38,11 @@ SDL_Texture *masterTexture = NULL;
 FILE *ptr_file;
 char shutdown = 0;
 
+TTF_Font *font = NULL;
+
+std::vector<std::string> songs;
+std::string song_title;
+
 void handle_sigint(int signal) {
     shutdown = 1;
 }
@@ -49,6 +54,46 @@ typedef struct {
 int last_y = 0;
 int top = 0, bottom = 0;
 
+// Define a structure to pass additional parameters to the event filter
+struct EventFilterData {
+    SDL_Window *window;
+    SDL_Window *window2;
+    int offsetX;
+    int offsetY;
+};
+
+// Event filter function
+int EventFilter(void *userdata, SDL_Event *event) {
+    EventFilterData *data = static_cast<EventFilterData *>(userdata);
+
+    if (event->type == SDL_WINDOWEVENT) {
+        if (event->window.windowID == SDL_GetWindowID(data->window)) {
+            if (event->window.event == SDL_WINDOWEVENT_MOVED) {
+                int winX, winY;
+                SDL_GetWindowPosition(data->window, &winX, &winY);
+
+                // Calculate the new position of window2 based on window's position and the offsets
+                int newWin2X = winX + data->offsetX;
+                int newWin2Y = winY + data->offsetY;
+
+                // Get the current position of window2
+                int win2X, win2Y;
+                SDL_GetWindowPosition(data->window2, &win2X, &win2Y);
+
+                // Check if window2 is docked or within the docking radius
+                bool isDocked = (std::abs(win2X - newWin2X) <= DOCK_RADIUS && std::abs(win2Y - newWin2Y) <= DOCK_RADIUS);
+
+                // Update the position of window2 if it is docked or near the main window
+                if (isDocked) {
+                    SDL_SetWindowPosition(data->window2, newWin2X, newWin2Y);
+                }
+            }
+        }
+    }
+
+    // Return 1 to allow the event to be processed normally
+    return 1;
+}
 
 Color colors[] = {
     {0, 0, 0, 255},        // color 0 = black
@@ -950,8 +995,8 @@ SDL_HitTestResult HitTestCallback(SDL_Window *Window, const SDL_Point *Area, voi
     SDL_GetWindowSize(Window, &Width, &Height);
 
     // Draggable area
-    int draggableWidth = Width * mult;
-    int draggableHeight = 14 * mult;
+    int draggableWidth = Width;
+    int draggableHeight = 14;
 
     // Specify the rectangle where resizing is allowed
     int resizeRectX = PL_ResizeX; // X-coordinate of the top-left corner of the resizable rectangle
@@ -1088,6 +1133,24 @@ int main(int argc, char *argv[]) {
                                           WIDTH, HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_BORDERLESS);
 
     SDL_Renderer *renderer2 = SDL_CreateRenderer(window2, -1, SDL_RENDERER_ACCELERATED);
+
+    // Initialize SDL_ttf
+    if (TTF_Init() == -1) {
+        std::cerr << "Failed to initialize SDL_ttf: " << TTF_GetError() << std::endl;
+        SDL_Quit();
+        return 1;
+    }
+
+        // Load font
+    font = TTF_OpenFont("/usr/share/fonts/TTF/tahoma.ttf", 11);
+    if (!font) {
+        std::cerr << "Failed to load font: " << TTF_GetError() << std::endl;
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        TTF_Quit();
+        SDL_Quit();
+        return 1;
+    }
 
     // Get the native window handles
     SDL_SysWMinfo info1, info2;
@@ -1240,6 +1303,13 @@ int main(int argc, char *argv[]) {
     int offsetX = 0;
     int offsetY = HEIGHT * mult;
 
+    // Set the event filter data
+    EventFilterData filterData = {window, window2, offsetX, offsetY}; // Example offset, change as needed
+
+    // Set the event filter
+    SDL_SetEventFilter(EventFilter, &filterData);
+
+
     short buf[BSZ];
     double fft_result[BSZ];
     int shutdown = 0;
@@ -1301,7 +1371,7 @@ int main(int argc, char *argv[]) {
         // Reapply the skip taskbar hint and dock the windows continuously
         if (display && childWindow) {
             set_skip_taskbar_hint(display, childWindow);
-            DockWindows(window, window2, offsetX, offsetY); // Example offset, change as needed
+            //DockWindows(window, window2, offsetX, offsetY); // Example offset, change as needed
         }
 
         struct mpd_status *status2 = mpd_run_status(conn);
@@ -1311,7 +1381,6 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         struct mpd_song *current_song = mpd_run_current_song(conn);
-        std::string song_title;
         std::string bitrate_info;
         std::string sample_rate_info;
 
@@ -1506,6 +1575,8 @@ int main(int argc, char *argv[]) {
         SDL_RenderPresent(renderer);
 
         draw_playlisteditor(window2, renderer2);
+        // Retrieve the list of songs
+        retrieve_songs(conn, songs);
 
         status = mpd_run_status(conn);
         if (!status) {
