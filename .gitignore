@@ -5,3 +5,6 @@ mpdvz
 mpdvz_debug
 mpdamp
 mpdamp_debug
+build/*
+.qmake.stash
+mpdamp.moc
