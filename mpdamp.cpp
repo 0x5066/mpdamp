@@ -1,6 +1,7 @@
 #include "mpdamp.h"
 #include "visualizer.h"
 #include "draw_numtext.h"
+#include "bitmaptext.h"
 
 #include <QPainter>
 #include <QTimer>
@@ -61,11 +62,13 @@ Color* osccolors(const Color* colors) {
     return osc_colors;
 }
 
-MPDAmp::MPDAmp(QWidget *parent)
-    : QWidget(parent), pipeFd(-1), in(nullptr), out(nullptr), conn(nullptr) {
+mpdamp::mpdamp(QWidget *parent)
+    : QWidget(parent) {
     // Load the background image
     backgroundImage.load("../main.bmp");
     fontImage.load("../numbers.bmp");
+    titleBarImage.load("../titlebar.bmp");
+    bitmaptextImage.load("../text.bmp");
 
     // Set the window size to the size of the image
     setFixedSize(backgroundImage.size());
@@ -84,13 +87,13 @@ MPDAmp::MPDAmp(QWidget *parent)
 
     // Initialize and start the visualizer timer
     visualizerTimer = new QTimer(this);
-    connect(visualizerTimer, &QTimer::timeout, this, &MPDAmp::updateVisualizer);
+    connect(visualizerTimer, &QTimer::timeout, this, &mpdamp::updateVisualizer);
     visualizerTimer->start(16); // Approximately 60 fps
 
     // init and start new timer
-    timeTimer = new QTimer(this);
-    connect(timeTimer, &QTimer::timeout, this, &MPDAmp::updateElapsedTime);
-    timeTimer->start(100); 
+    metadataTimer = new QTimer(this);
+    connect(metadataTimer, &QTimer::timeout, this, &mpdamp::updateMetadata);
+    metadataTimer->start(16); 
 
     // init mpd connection
     conn = mpd_connection_new(NULL, 0, 0);
@@ -98,9 +101,13 @@ MPDAmp::MPDAmp(QWidget *parent)
         fprintf(stderr, "Error connecting to MPD: %s\n", mpd_connection_get_error_message(conn));
         mpd_connection_free(conn);
     }
+
+    // Track focus changes
+    setFocusPolicy(Qt::StrongFocus);
+    installEventFilter(this);
 }
 
-MPDAmp::~MPDAmp() {
+mpdamp::~mpdamp() {
     if (pipeFd != -1) {
         ::close(pipeFd);
     }
@@ -110,20 +117,164 @@ MPDAmp::~MPDAmp() {
     if (conn) mpd_connection_free(conn);
 }
 
-void MPDAmp::paintEvent(QPaintEvent *event) {
+bool mpdamp::eventFilter(QObject *obj, QEvent *event) {
+    if (event->type() == QEvent::FocusIn) {
+        isActive = true;
+        update();
+    } else if (event->type() == QEvent::FocusOut) {
+        isActive = false;
+        update();
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+void mpdamp::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
 
     // Draw the background image
     painter.drawImage(0, 0, backgroundImage);
+
+    // Draw the title bar
+    QRect titleBarRect = isActive ? QRect(27, 0, 275, 14) : QRect(27, 15, 275, 14);
+    painter.drawImage(0, 0, titleBarImage, titleBarRect.x(), titleBarRect.y(), titleBarRect.width(), titleBarRect.height());
 
     // Draw the visualizer
     drawVisualizer(&painter);
 
     // Draw the number text
     drawNumText(&painter);
+
+    drawSongText(&painter);
+    drawKHz(&painter);
+    drawBitrate(&painter);
 }
 
-void MPDAmp::drawVisualizer(QPainter *painter) {
+void mpdamp::mousePressEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton && event->pos().y() <= 14) { // Only drag if clicked within the title bar area
+        dragging = true;
+        dragStartPosition = event->globalPos() - frameGeometry().topLeft();
+        event->accept();
+    }
+}
+
+void mpdamp::mouseMoveEvent(QMouseEvent *event) {
+    if (dragging) {
+        move(event->globalPos() - dragStartPosition);
+        event->accept();
+    }
+}
+
+void mpdamp::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton) {
+        dragging = false;
+        event->accept();
+    }
+}
+
+std::string getFilenameFromURI(const std::string& uri) {
+    // Find the last slash in the URI
+    size_t lastSlashPos = uri.find_last_of('/');
+    if (lastSlashPos != std::string::npos) {
+        // Extract the filename from the URI
+        return uri.substr(lastSlashPos + 1);
+    }
+    // If no slash is found, return the original URI (unlikely case)
+    return uri;
+}
+
+const char *format_time2(unsigned int time, char *buffer) {
+    unsigned int minutes = time / 60;
+    unsigned int seconds = time % 60;
+    sprintf(buffer, "%u:%02u", minutes, seconds);
+
+    return buffer;
+}
+
+unsigned int getCurrentSongID(mpd_connection *conn) {
+    struct mpd_status *status = mpd_run_status(conn);
+    unsigned int song_id = mpd_status_get_song_id(status);
+    mpd_status_free(status);
+    return song_id;
+}
+
+void mpdamp::updateSongInfo() {
+    int res = 1;
+    char time_str2[6];
+    current_song_id = getCurrentSongID(conn);
+    if (!conn) return;
+
+    struct mpd_song *current_song = mpd_run_current_song(conn);
+    if (!current_song) {
+        songTitle = ("No current song");
+        bitrate_info = ("  0");
+        sample_rate_info = (" 0");
+        return;
+    }
+
+    const char *title = mpd_song_get_tag(current_song, MPD_TAG_TITLE, 0);
+    const char *artist = mpd_song_get_tag(current_song, MPD_TAG_ARTIST, 0);
+    const char *album = mpd_song_get_tag(current_song, MPD_TAG_ALBUM, 0);
+    const char *track = mpd_song_get_tag(current_song, MPD_TAG_UNKNOWN, 0);
+    std::string filename = getFilenameFromURI(mpd_song_get_uri(current_song));
+
+    struct mpd_status *status2 = mpd_run_status(conn);
+    if (!status2) {
+        mpd_song_free(current_song);
+        return;
+    }
+
+    float total_time = mpd_status_get_total_time(status2);
+
+    int bitrate = mpd_status_get_kbit_rate(status2);
+    const struct mpd_audio_format *audio_format = mpd_status_get_audio_format(status2);
+    int sample_rate = (audio_format != nullptr) ? audio_format->sample_rate : 0;
+    int channels = (audio_format != nullptr) ? audio_format->channels : 0;
+
+    if (title && artist) {
+        songTitle = QString("%1. %2 - %3 (%4)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(artist)).arg(QString::fromUtf8(title)).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
+    } else if (title) {
+        songTitle = QString("%1. %2 (%3)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(title)).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
+    } else {
+        songTitle = QString("%1. %2 (%3)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(filename.c_str())).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
+    }
+
+    if (bitrate > 0) {
+        if (bitrate < 10) {
+            bitrate_info = QString("  %1").arg(bitrate);
+        } else if (bitrate < 100) {
+            bitrate_info = QString(" %1").arg(bitrate);
+        } else if (bitrate > 1000) {
+            QString bitrate_str = QString::number(bitrate);
+            bitrate_info = bitrate_str.mid(0, 2) + "H";
+        } else {
+            bitrate_info = QString::number(bitrate);
+        }
+    } else {
+        if (res == 1 || res == 3) {
+            bitrate_info = "  0";
+        }
+    }
+
+    if (sample_rate > 0) {
+        if (sample_rate < 10) {
+            sample_rate_info = QString(" %1").arg(sample_rate / 1000.0, 0, 'f', 1);
+        } else if (sample_rate / 1000 > 100) {
+            QString sample_rate_str = QString::number(sample_rate / 1000.0, 'f', 1);
+            sample_rate_info = sample_rate_str.mid(1, 3);
+        } else {
+            sample_rate_info = QString::number(sample_rate / 1000.0, 'f', 1);
+        }
+    } else {
+        if (res == 1 || res == 3) {
+            sample_rate_info = " 0";
+        }
+    }
+
+    mpd_status_free(status2);
+    mpd_song_free(current_song);
+}
+
+void mpdamp::drawVisualizer(QPainter *painter) {
     painter->save();
 
     // Translate the painter to the visualization position
@@ -138,7 +289,7 @@ void MPDAmp::drawVisualizer(QPainter *painter) {
     painter->restore();
 }
 
-void MPDAmp::drawNumText(QPainter *painter) {
+void mpdamp::drawNumText(QPainter *painter) {
     painter->save();
 
     // Translate the painter to the desired text position
@@ -150,17 +301,58 @@ void MPDAmp::drawNumText(QPainter *painter) {
     painter->restore();
 }
 
-void MPDAmp::updateVisualizer() {
+void mpdamp::drawSongText(QPainter *painter) {
+    painter->save();
+
+    painter->translate(111, 27);
+
+    painter->setClipRect(0, 0, 154, 6);
+
+    draw_bitmaptext(painter, &bitmaptextImage, songTitle, 0, 0);
+
+    painter->restore();
+}
+
+void mpdamp::drawKHz(QPainter *painter) {
+    painter->save();
+
+    painter->translate(156, 43);
+
+    painter->setClipRect(0, 0, 10, 6);
+
+    draw_bitmaptext(painter, &bitmaptextImage, sample_rate_info, 0, 0);
+
+    painter->restore();
+}
+
+void mpdamp::drawBitrate(QPainter *painter) {
+    painter->save();
+
+    painter->translate(111, 43);
+
+    painter->setClipRect(0, 0, 15, 6);
+
+    draw_bitmaptext(painter, &bitmaptextImage, bitrate_info, 0, 0);
+
+    painter->restore();
+}
+
+void mpdamp::updateVisualizer() {
     readPipe();
     processBuffer();
     update();
 }
 
-void MPDAmp::updateElapsedTime() {
+void mpdamp::updateElapsedTime() {
     update();
 }
 
-void MPDAmp::readPipe() {
+void mpdamp::updateMetadata() {
+    updateSongInfo();
+    update();
+}
+
+void mpdamp::readPipe() {
     if (pipeFd != -1) {
         read_count = read(pipeFd, buffer, sizeof(short) * BSZ);
         if (read_count == -1 && errno != EAGAIN) {
@@ -197,7 +389,7 @@ double c_weighting(double freq) {
     return r * constant;
 }
 
-void MPDAmp::processBuffer() {
+void mpdamp::processBuffer() {
     // Apply Blackman-Harris window to the input data
     if (read_count > 0) {
         for (int i = 0; i < BSZ; i++) {
@@ -213,7 +405,7 @@ void MPDAmp::processBuffer() {
     }
 }
 
-QString MPDAmp::formatTime(double seconds) {
+QString mpdamp::formatTime(double seconds) {
     int minutes = static_cast<int>(seconds) / 60;
     int secs = static_cast<int>(seconds) % 60;
 

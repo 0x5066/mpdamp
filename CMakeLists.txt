@@ -26,6 +26,8 @@ add_executable(mpdamp
     visualizer.h
     draw_numtext.cpp
     draw_numtext.h
+    bitmaptext.h
+    bitmaptext.cpp
 )
 
 target_link_libraries(mpdamp Qt5::Core Qt5::Widgets ${FFTW_LIB} mpdclient)

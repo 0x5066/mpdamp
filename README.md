@@ -1,11 +1,11 @@
-MPDamp
+mpdamp
 ======
 
 mpd client that resembles Winamp Classic accurately
 
 Forked off of sofuture's mpdvz for the mere reason of getting audio data from mpd to visualize in a Winamp-like visualizer
 
-![screenshot](https://raw.githubusercontent.com/0x5066/MPDamp/master/screenshot.png)
+![screenshot](https://raw.githubusercontent.com/0x5066/mpdamp/master/screenshot.png)
 
 instructions
 ------------
