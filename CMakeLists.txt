@@ -9,17 +9,13 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt5 COMPONENTS Widgets REQUIRED)
 
-# Manually specify FFTW library and include directories
-find_library(FFTW_LIB fftw3 REQUIRED)
-find_path(FFTW_INCLUDE_DIR fftw3.h REQUIRED)
-
-include_directories(${FFTW_INCLUDE_DIR})
-
 # Set compiler flags for debugging
 set(CMAKE_CXX_FLAGS_DEBUG "-g3 -O0")
 
 add_executable(mpdamp
     main.cpp
+    fft.cpp
+    fft.h
     mpdamp.cpp
     mpdamp.h
     visualizer.cpp
@@ -30,7 +26,7 @@ add_executable(mpdamp
     bitmaptext.cpp
 )
 
-target_link_libraries(mpdamp Qt5::Core Qt5::Widgets ${FFTW_LIB} mpdclient)
+target_link_libraries(mpdamp Qt5::Core Qt5::Widgets mpdclient)
 
 # Set the build type to Debug to apply the debug flags
 set(CMAKE_BUILD_TYPE Debug)

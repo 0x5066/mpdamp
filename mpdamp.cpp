@@ -1,7 +1,5 @@
 #include "mpdamp.h"
 #include "visualizer.h"
-#include "draw_numtext.h"
-#include "bitmaptext.h"
 
 #include <QPainter>
 #include <QTimer>
@@ -70,6 +68,24 @@ mpdamp::mpdamp(QWidget *parent)
     titleBarImage.load("../titlebar.bmp");
     bitmaptextImage.load("../text.bmp");
 
+    visualizerWidget = new Visualizer::VisualizerWidget(this);
+    visualizerWidget->setGeometry(24, 43, 75, 16); // Position and size as needed
+
+    numTextWidget = new NumTextWidget(this);
+    numTextWidget->setGeometry(36, 26, 100, 13); // Adjust the position and size as needed
+
+    songTextWidget = new BitmapTextWidget(this);
+    songTextWidget->setFontImage(bitmaptextImage);
+    songTextWidget->setGeometry(111, 27, 200, 20); // Adjust the position and size as needed
+
+    kHzWidget = new BitmapTextWidget(this);
+    kHzWidget->setFontImage(bitmaptextImage);
+    kHzWidget->setGeometry(156, 43, 100, 20); // Adjust the position and size as needed
+
+    bitrateWidget = new BitmapTextWidget(this);
+    bitrateWidget->setFontImage(bitmaptextImage);
+    bitrateWidget->setGeometry(111, 43, 100, 20); // Adjust the position and size as needed
+
     // Set the window size to the size of the image
     setFixedSize(backgroundImage.size());
     setWindowFlags(Qt::FramelessWindowHint);
@@ -80,10 +96,11 @@ mpdamp::mpdamp(QWidget *parent)
         perror("open");
     }
 
-    // Initialize FFTW
-    in = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * BSZ);
-    out = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * BSZ);
-    p = fftw_plan_dft_1d(BSZ, in, out, FFTW_FORWARD, FFTW_ESTIMATE);
+    // Step 1: Initialize FFT
+    fft;
+    int samples_in = BSZ / 2;
+    int samples_out = BSZ/4;
+    fft.Init(samples_in, samples_out, 1, 1.0f);
 
     // Initialize and start the visualizer timer
     visualizerTimer = new QTimer(this);
@@ -102,18 +119,31 @@ mpdamp::mpdamp(QWidget *parent)
         mpd_connection_free(conn);
     }
 
+    scrollTimer = new QTimer(this);
+    connect(scrollTimer, &QTimer::timeout, this, &mpdamp::updateScrollPosition);
+    scrollTimer->start(350); // Adjust the interval as needed (e.g., 100 ms)
+
     // Track focus changes
     setFocusPolicy(Qt::StrongFocus);
     installEventFilter(this);
+    songTextWidget->setText(originalSongTitle.left(31));
+}
+
+void mpdamp::updateScrollPosition() {
+    QString longTitle = QString(originalSongTitle) + " *** " + originalSongTitle.left(30);
+    if (longTitle.length() > 31) {
+        scrollPosition = (scrollPosition + 1) % (longTitle.length() - 31 + 1);
+        QString truncatedTitle = longTitle.mid(scrollPosition, 31);
+        songTextWidget->setText(truncatedTitle);
+    } else {
+        songTextWidget->setText(originalSongTitle.left(31));
+    }
 }
 
 mpdamp::~mpdamp() {
     if (pipeFd != -1) {
         ::close(pipeFd);
     }
-    fftw_destroy_plan(p);
-    fftw_free(in);
-    fftw_free(out);
     if (conn) mpd_connection_free(conn);
 }
 
@@ -137,16 +167,6 @@ void mpdamp::paintEvent(QPaintEvent *event) {
     // Draw the title bar
     QRect titleBarRect = isActive ? QRect(27, 0, 275, 14) : QRect(27, 15, 275, 14);
     painter.drawImage(0, 0, titleBarImage, titleBarRect.x(), titleBarRect.y(), titleBarRect.width(), titleBarRect.height());
-
-    // Draw the visualizer
-    drawVisualizer(&painter);
-
-    // Draw the number text
-    drawNumText(&painter);
-
-    drawSongText(&painter);
-    drawKHz(&painter);
-    drawBitrate(&painter);
 }
 
 void mpdamp::mousePressEvent(QMouseEvent *event) {
@@ -205,7 +225,7 @@ void mpdamp::updateSongInfo() {
 
     struct mpd_song *current_song = mpd_run_current_song(conn);
     if (!current_song) {
-        songTitle = ("No current song");
+        originalSongTitle = ("mpdamp 0.0");
         bitrate_info = ("  0");
         sample_rate_info = (" 0");
         return;
@@ -231,11 +251,11 @@ void mpdamp::updateSongInfo() {
     int channels = (audio_format != nullptr) ? audio_format->channels : 0;
 
     if (title && artist) {
-        songTitle = QString("%1. %2 - %3 (%4)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(artist)).arg(QString::fromUtf8(title)).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
+        originalSongTitle = QString("%1. %2 - %3 (%4)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(artist)).arg(QString::fromUtf8(title)).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
     } else if (title) {
-        songTitle = QString("%1. %2 (%3)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(title)).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
+        originalSongTitle = QString("%1. %2 (%3)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(title)).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
     } else {
-        songTitle = QString("%1. %2 (%3)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(filename.c_str())).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
+        originalSongTitle = QString("%1. %2 (%3)").arg(QString::number(current_song_id)).arg(QString::fromUtf8(filename.c_str())).arg(QString::fromUtf8(format_time2(total_time, time_str2)));
     }
 
     if (bitrate > 0) {
@@ -257,12 +277,12 @@ void mpdamp::updateSongInfo() {
 
     if (sample_rate > 0) {
         if (sample_rate < 10) {
-            sample_rate_info = QString(" %1").arg(sample_rate / 1000.0, 0, 'f', 1);
+            sample_rate_info = QString(" %1").arg(sample_rate / 1000, 0, 'f', 0);
         } else if (sample_rate / 1000 > 100) {
-            QString sample_rate_str = QString::number(sample_rate / 1000.0, 'f', 1);
+            QString sample_rate_str = QString::number(sample_rate / 1000, 'f', 0);
             sample_rate_info = sample_rate_str.mid(1, 3);
         } else {
-            sample_rate_info = QString::number(sample_rate / 1000.0, 'f', 1);
+            sample_rate_info = QString::number(sample_rate / 1000, 'f', 0);
         }
     } else {
         if (res == 1 || res == 3) {
@@ -274,73 +294,10 @@ void mpdamp::updateSongInfo() {
     mpd_song_free(current_song);
 }
 
-void mpdamp::drawVisualizer(QPainter *painter) {
-    painter->save();
-
-    // Translate the painter to the visualization position
-    painter->translate(24, 43);
-
-    // Set the clipping region to 76x16
-    painter->setClipRect(0, 0, 76, 16);
-
-    // Render the visualization
-    Visualizer::render(painter, buffer, fftData, BSZ);
-
-    painter->restore();
-}
-
-void mpdamp::drawNumText(QPainter *painter) {
-    painter->save();
-
-    // Translate the painter to the desired text position
-    painter->translate(36, 26); // Adjust position as needed
-
-    // Draw the number text
-    draw_numtext(painter, &fontImage, formatTime(mpd_status_get_elapsed_time(mpd_run_status(conn))), 0, 0, 1, 0);
-
-    painter->restore();
-}
-
-void mpdamp::drawSongText(QPainter *painter) {
-    painter->save();
-
-    painter->translate(111, 27);
-
-    painter->setClipRect(0, 0, 154, 6);
-
-    draw_bitmaptext(painter, &bitmaptextImage, songTitle, 0, 0);
-
-    painter->restore();
-}
-
-void mpdamp::drawKHz(QPainter *painter) {
-    painter->save();
-
-    painter->translate(156, 43);
-
-    painter->setClipRect(0, 0, 10, 6);
-
-    draw_bitmaptext(painter, &bitmaptextImage, sample_rate_info, 0, 0);
-
-    painter->restore();
-}
-
-void mpdamp::drawBitrate(QPainter *painter) {
-    painter->save();
-
-    painter->translate(111, 43);
-
-    painter->setClipRect(0, 0, 15, 6);
-
-    draw_bitmaptext(painter, &bitmaptextImage, bitrate_info, 0, 0);
-
-    painter->restore();
-}
-
 void mpdamp::updateVisualizer() {
     readPipe();
     processBuffer();
-    update();
+    visualizerWidget->setData(buffer, out_spectraldata, BSZ);
 }
 
 void mpdamp::updateElapsedTime() {
@@ -349,6 +306,11 @@ void mpdamp::updateElapsedTime() {
 
 void mpdamp::updateMetadata() {
     updateSongInfo();
+    QString elapsedTime = formatTime(mpd_status_get_elapsed_time(mpd_run_status(conn)));
+    numTextWidget->setParameters(elapsedTime, 1, 0); // Update with appropriate parameters
+    //songTextWidget->setText(truncatedSongTitle);
+    kHzWidget->setText(sample_rate_info);
+    bitrateWidget->setText(bitrate_info);
     update();
 }
 
@@ -364,45 +326,11 @@ void mpdamp::readPipe() {
     }
 }
 
-// Function to calculate the Blackman-Harris window coefficient
-double blackman_harris(int n, int N) {
-    const double a0 = 0.35875;
-    const double a1 = 0.48829;
-    const double a2 = 0.14128;
-    const double a3 = 0.01168;
-    return a0 - a1 * cos((2.0 * M_PI * n) / (N - 1))
-               + a2 * cos((4.0 * M_PI * n) / (N - 1))
-               - a3 * cos((6.0 * M_PI * n) / (N - 1));
-}
-
-// C-weighting filter coefficients calculation
-double c_weighting(double freq) {
-    double f2 = freq * freq;
-    // Adjust these constants to change the weighting curve
-    double f2_plus_20_6_squared = f2 + 40.6 * 40.6;  // Low-frequency pole
-    double f2_plus_12200_squared = f2 + 2200 * 2200;  // High-frequency pole
-
-    // Original constant is 1.0072; lower it to reduce overall high-frequency gain
-    double constant = 1.2;  // Adjust this constant to decrease high frequency gain
-    
-    double r = (f2 * (f2 + 1.94e5)) / (f2_plus_20_6_squared * f2_plus_12200_squared);
-    return r * constant;
-}
-
 void mpdamp::processBuffer() {
-    // Apply Blackman-Harris window to the input data
-    if (read_count > 0) {
-        for (int i = 0; i < BSZ; i++) {
-            double window = blackman_harris(i, BSZ);
-            in[i][0] = buffer[i] * window; // Apply Hann window to real part
-            in[i][1] = 0.0;             // Imaginary part remains 0
-        }
-        fftw_execute(p);
-
-        for (int i = 0; i < BSZ; i++) {
-            fftData[i] = sqrt(out[i][0] * out[i][0] + out[i][1] * out[i][1]); // Magnitude
-        }
+    for (int i = 0; i < 576; i++) {
+        in_wavedata[i] = ((float)buffer[i] / 4096);
     }
+    fft.time_to_frequency_domain(in_wavedata, out_spectraldata);
 }
 
 QString mpdamp::formatTime(double seconds) {

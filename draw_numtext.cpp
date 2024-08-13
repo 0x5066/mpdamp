@@ -1,9 +1,25 @@
 #include "draw_numtext.h"
+#include <QPainter>
 
 #define NUM_WIDTH 9
 #define NUM_HEIGHT 13
 
-void draw_numtext(QPainter *painter, QImage *fontImage, const QString &text, int x, int y, int res, int blinking) {
+NumTextWidget::NumTextWidget(QWidget *parent)
+    : QWidget(parent), res(1), blinking(0) {
+    fontImage.load("../numbers.bmp"); // Load your font image here
+}
+
+void NumTextWidget::setParameters(const QString &text, int res, int blinking) {
+    this->text = text;
+    this->res = res;
+    this->blinking = blinking;
+    update(); // Request a repaint
+}
+
+void NumTextWidget::paintEvent(QPaintEvent *event) {
+    Q_UNUSED(event);
+
+    QPainter painter(this);
 
     QString numbers;
     if (res == 3) {
@@ -17,6 +33,8 @@ void draw_numtext(QPainter *painter, QImage *fontImage, const QString &text, int
     }
 
     if (!numbers.isEmpty() && (res == 1 || res == 3)) {
+        int x = 0; // Starting x position
+        int y = 0; // Starting y position
         for (const QChar &c : numbers) {
             QRect src_rect;
             if (c >= '0' && c <= '9') {
@@ -34,7 +52,7 @@ void draw_numtext(QPainter *painter, QImage *fontImage, const QString &text, int
 
             if (!src_rect.isNull()) {
                 QRect dst_rect(x, y, src_rect.width(), src_rect.height());
-                painter->drawImage(dst_rect, *fontImage, src_rect);
+                painter.drawImage(dst_rect, fontImage, src_rect);
                 if (c == ':') {
                     x -= 6;  // Decrement x position for colon
                 }

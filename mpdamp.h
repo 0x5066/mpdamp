@@ -5,8 +5,10 @@
 #include <QImage>
 #include <QTimer>
 #include <QMouseEvent>
-#include <fftw3.h>
 #include <mpd/client.h>
+#include "visualizer.h"
+#include "draw_numtext.h"
+#include "bitmaptext.h"
 
 const static int BSZ = 1152;
 const static int BSZ2 = BSZ / 2;
@@ -25,6 +27,7 @@ class mpdamp : public QWidget {
 public:
     mpdamp(QWidget *parent = nullptr);
     ~mpdamp();
+    FFT fft;
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -42,15 +45,16 @@ private slots:
 private:
     void readPipe();
     void processBuffer();
-    void drawVisualizer(QPainter *painter);
-    void drawNumText(QPainter *painter);
-    void drawSongText(QPainter *painter);
-    void drawKHz(QPainter *painter);
-    void drawBitrate(QPainter *painter);
+    void updateScrollPosition();
     QString formatTime(double seconds); // Convert seconds to MM:SS
     QString songTitle;
     QString bitrate_info;
     QString sample_rate_info;
+
+    int scrollPosition;
+    QTimer *scrollTimer;
+    QString truncatedSongTitle;
+    QString originalSongTitle;
 
     int pipeFd;
     unsigned int current_song_id;
@@ -61,6 +65,8 @@ private:
     QImage bitmaptextImage;
     QImage titleBarImage;
     QTimer *visualizerTimer;
+    Visualizer::VisualizerWidget *visualizerWidget;
+    NumTextWidget *numTextWidget;
     QTimer *timeTimer; // Timer for updating elapsed time
     QTimer *metadataTimer;
 
@@ -69,14 +75,19 @@ private:
     // MPD connection
     struct mpd_connection *conn;
 
-    // FFT variables
-    fftw_plan p;
-    fftw_complex *in, *out;
+    float in_wavedata[BSZ];
+    float out_spectraldata[1152];
 
     // Title bar variables
     bool isActive;
     bool dragging;
     QPoint dragStartPosition;
+
+    BitmapTextWidget *songTextWidget;
+    BitmapTextWidget *kHzWidget;
+    BitmapTextWidget *bitrateWidget;
 };
+
+double c_weighting(double freq);
 
 #endif // MPDAMP_H
